@@ -360,9 +360,14 @@ canvas {
   font-size: 1.15rem;
 }
 
-.allocation-wrap {
+.allocation-wrap,
+.market-wrap {
   max-height: 312px;
   overflow: auto;
+}
+
+.market-panel {
+  min-height: 260px;
 }
 
 table {
@@ -390,6 +395,16 @@ th {
 td:last-child,
 th:last-child {
   text-align: right;
+}
+
+td.up {
+  color: var(--red);
+  font-weight: 800;
+}
+
+td.down {
+  color: var(--green);
+  font-weight: 800;
 }
 
 .timeline-panel {

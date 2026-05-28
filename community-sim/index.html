@@ -104,6 +104,23 @@
               <input id="returnRate" type="range" min="0" max="35" value="12" step="1">
               <output id="returnRateOut"></output>
             </label>
+            <label>
+              Exchange rates
+              <select id="priceMode">
+                <option value="floating">Floating, attested</option>
+                <option value="fixed">Fixed rule table</option>
+              </select>
+            </label>
+            <label>
+              Price attestations
+              <input id="priceSignal" type="range" min="0" max="100" value="55" step="5">
+              <output id="priceSignalOut"></output>
+            </label>
+            <label>
+              Production variance
+              <input id="productionVariance" type="range" min="0" max="60" value="24" step="2">
+              <output id="productionVarianceOut"></output>
+            </label>
           </div>
         </aside>
 
@@ -154,7 +171,7 @@
                 <div><dt>ceremony</dt><dd>records an admission attempt</dd></div>
                 <div><dt>endorsement</dt><dd>sponsors or peers vouch for someone</dd></div>
                 <div><dt>objection</dt><dd>a witness disputes a ceremony or claim</dd></div>
-                <div><dt>claim</dt><dd>ordinary observations and recognitions</dd></div>
+                <div><dt>market</dt><dd>quotes, purchases, and clearing decisions</dd></div>
               </dl>
               <div class="mini-stats">
                 <div><span>ceremony records</span><strong id="ceremonyCount">0</strong></div>
@@ -179,6 +196,27 @@
                     </tr>
                   </thead>
                   <tbody id="allocationTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel market-panel">
+              <div class="panel-head">
+                <h2>Goods Market</h2>
+                <span id="marketLabel" class="status-pill">floating</span>
+              </div>
+              <div class="market-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Good</th>
+                      <th>Supply</th>
+                      <th>Demand</th>
+                      <th>Price</th>
+                      <th>Cleared</th>
+                    </tr>
+                  </thead>
+                  <tbody id="marketTable"></tbody>
                 </table>
               </div>
             </section>

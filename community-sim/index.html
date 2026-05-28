@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Comms Community Simulator</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar" aria-label="Simulation controls">
+        <div>
+          <p class="eyebrow">Comms Attest 1.0</p>
+          <h1>Community Simulator</h1>
+        </div>
+        <div class="run-controls">
+          <button id="stepBtn" class="primary" type="button" title="Advance one cycle">
+            <span aria-hidden="true">&gt;</span>
+            <span>Step</span>
+          </button>
+          <button id="runBtn" type="button" title="Run or pause the simulation">
+            <span aria-hidden="true">[]</span>
+            <span>Run</span>
+          </button>
+          <button id="resetBtn" type="button" title="Reset simulation">
+            <span aria-hidden="true">R</span>
+            <span>Reset</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="controls" aria-label="Scenario parameters">
+          <div class="control-group">
+            <h2>Community</h2>
+            <label>
+              Initial stewards
+              <input id="population" type="range" min="8" max="44" value="22" step="1">
+              <output id="populationOut"></output>
+            </label>
+            <label>
+              Baseline trust
+              <input id="trust" type="range" min="20" max="90" value="58" step="1">
+              <output id="trustOut"></output>
+            </label>
+            <label>
+              Attestation frequency
+              <input id="attestFreq" type="range" min="1" max="10" value="5" step="1">
+              <output id="attestFreqOut"></output>
+            </label>
+            <label>
+              Objection pressure
+              <input id="objectionRate" type="range" min="0" max="35" value="9" step="1">
+              <output id="objectionRateOut"></output>
+            </label>
+          </div>
+
+          <div class="control-group">
+            <h2>Ceremonies</h2>
+            <label>
+              Minimum sponsors
+              <input id="sponsors" type="range" min="1" max="6" value="2" step="1">
+              <output id="sponsorsOut"></output>
+            </label>
+            <label>
+              Witness quorum
+              <input id="witnessQuorum" type="range" min="1" max="10" value="4" step="1">
+              <output id="witnessQuorumOut"></output>
+            </label>
+            <label>
+              Commit rule
+              <select id="commitRule">
+                <option value="sponsor-quorum">Sponsor quorum</option>
+                <option value="majority">Majority consent</option>
+                <option value="unanimous-witnesses">Unanimous witnesses</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="control-group">
+            <h2>Economy</h2>
+            <label>
+              Resource pool
+              <input id="pool" type="range" min="80" max="600" value="220" step="10">
+              <output id="poolOut"></output>
+            </label>
+            <label>
+              Seed floor
+              <input id="seedFloor" type="range" min="5" max="45" value="20" step="1">
+              <output id="seedFloorOut"></output>
+            </label>
+            <label>
+              Per-steward cap
+              <input id="cap" type="range" min="15" max="60" value="36" step="1">
+              <output id="capOut"></output>
+            </label>
+            <label>
+              Return culture
+              <input id="returnRate" type="range" min="0" max="35" value="12" step="1">
+              <output id="returnRateOut"></output>
+            </label>
+          </div>
+        </aside>
+
+        <section class="stage" aria-label="Simulation output">
+          <div class="metrics">
+            <article>
+              <span>Cycle</span>
+              <strong id="cycleMetric">0</strong>
+            </article>
+            <article>
+              <span>Active stewards</span>
+              <strong id="membersMetric">0</strong>
+            </article>
+            <article>
+              <span>Mean trust</span>
+              <strong id="trustMetric">0%</strong>
+            </article>
+            <article>
+              <span>Attestations</span>
+              <strong id="attestMetric">0</strong>
+            </article>
+            <article>
+              <span>Gini</span>
+              <strong id="giniMetric">0.00</strong>
+            </article>
+          </div>
+
+          <div class="main-grid">
+            <section class="panel network-panel">
+              <div class="panel-head">
+                <h2>Trust Fabric</h2>
+                <div class="legend">
+                  <span><i class="member"></i>member</span>
+                  <span><i class="candidate"></i>candidate</span>
+                  <span><i class="sponsor"></i>sponsor</span>
+                </div>
+              </div>
+              <canvas id="networkCanvas" width="920" height="560"></canvas>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Audit Graph</h2>
+                <span id="commitStatus" class="status-pill">ready</span>
+              </div>
+              <canvas id="auditCanvas" width="520" height="220"></canvas>
+              <div class="mini-stats">
+                <div><span>ceremony records</span><strong id="ceremonyCount">0</strong></div>
+                <div><span>endorsements</span><strong id="endorsementCount">0</strong></div>
+                <div><span>objections</span><strong id="objectionCount">0</strong></div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <h2>Resource Allocation</h2>
+                <span id="poolLabel"></span>
+              </div>
+              <div class="allocation-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Steward</th>
+                      <th>Need</th>
+                      <th>Trust</th>
+                      <th>Grant</th>
+                    </tr>
+                  </thead>
+                  <tbody id="allocationTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel timeline-panel">
+              <div class="panel-head">
+                <h2>Event Log</h2>
+                <button id="exportBtn" type="button" title="Export current attestation summary">
+                  <span aria-hidden="true">v</span>
+                  <span>Export</span>
+                </button>
+              </div>
+              <ol id="eventLog" class="event-log"></ol>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

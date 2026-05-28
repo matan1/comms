@@ -17,7 +17,8 @@ const controls = {
   pool: byId("pool"),
   seedFloor: byId("seedFloor"),
   cap: byId("cap"),
-  returnRate: byId("returnRate")
+  returnRate: byId("returnRate"),
+  runSpeed: byId("runSpeed")
 };
 
 const outputs = {
@@ -30,7 +31,8 @@ const outputs = {
   pool: byId("poolOut"),
   seedFloor: byId("seedFloorOut"),
   cap: byId("capOut"),
-  returnRate: byId("returnRateOut")
+  returnRate: byId("returnRateOut"),
+  runSpeed: byId("runSpeedOut")
 };
 
 const ui = {
@@ -74,7 +76,8 @@ function params() {
     pool: Number(controls.pool.value),
     seedFloor: Number(controls.seedFloor.value) / 100,
     cap: Number(controls.cap.value) / 100,
-    returnRate: Number(controls.returnRate.value) / 100
+    returnRate: Number(controls.returnRate.value) / 100,
+    runSpeed: Number(controls.runSpeed.value)
   };
 }
 
@@ -90,6 +93,11 @@ function syncOutputs() {
   outputs.seedFloor.value = `${Math.round(p.seedFloor * 100)}%`;
   outputs.cap.value = `${Math.round(p.cap * 100)}%`;
   outputs.returnRate.value = `${Math.round(p.returnRate * 100)}%`;
+  outputs.runSpeed.value = `${runDelay(p.runSpeed)} ms`;
+}
+
+function runDelay(speed) {
+  return Math.round(1100 - speed * 95);
 }
 
 function reset() {
@@ -588,19 +596,26 @@ ui.runBtn.addEventListener("click", () => {
   if (timer) {
     stop();
   } else {
-    ui.runBtn.lastElementChild.textContent = "Pause";
-    timer = window.setInterval(step, 650);
+    start();
   }
 });
 ui.exportBtn.addEventListener("click", exportSummary);
 window.addEventListener("resize", render);
+
+function start() {
+  stop();
+  ui.runBtn.lastElementChild.textContent = "Pause";
+  timer = window.setInterval(step, runDelay(params().runSpeed));
+}
 
 function stop() {
   if (timer) {
     window.clearInterval(timer);
     timer = null;
   }
-  ui.runBtn.lastElementChild.textContent = "Run";
+  if (ui.runBtn.lastElementChild) {
+    ui.runBtn.lastElementChild.textContent = "Run";
+  }
 }
 
 syncOutputs();

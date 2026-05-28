@@ -26,6 +26,11 @@
             <span aria-hidden="true">R</span>
             <span>Reset</span>
           </button>
+          <label class="speed-control">
+            Run speed
+            <input id="runSpeed" type="range" min="1" max="10" value="5" step="1">
+            <output id="runSpeedOut"></output>
+          </label>
         </div>
       </section>
 
@@ -117,7 +122,7 @@
               <strong id="trustMetric">0%</strong>
             </article>
             <article>
-              <span>Attestations</span>
+              <span>Recorded attestations</span>
               <strong id="attestMetric">0</strong>
             </article>
             <article>
@@ -145,6 +150,12 @@
                 <span id="commitStatus" class="status-pill">ready</span>
               </div>
               <canvas id="auditCanvas" width="520" height="220"></canvas>
+              <dl class="attestation-key">
+                <div><dt>ceremony</dt><dd>records an admission attempt</dd></div>
+                <div><dt>endorsement</dt><dd>sponsors or peers vouch for someone</dd></div>
+                <div><dt>objection</dt><dd>a witness disputes a ceremony or claim</dd></div>
+                <div><dt>claim</dt><dd>ordinary observations and recognitions</dd></div>
+              </dl>
               <div class="mini-stats">
                 <div><span>ceremony records</span><strong id="ceremonyCount">0</strong></div>
                 <div><span>endorsements</span><strong id="endorsementCount">0</strong></div>

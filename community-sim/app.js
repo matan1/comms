@@ -172,6 +172,8 @@ function makeSteward(index, baselineTrust, member) {
     candidate: !member,
     sponsors: [],
     trust: clamp(baselineTrust + (rand() - 0.5) * 0.28, 0.05, 0.97),
+    trustPrior: clamp(baselineTrust + (rand() - 0.5) * 0.16, 0.05, 0.97),
+    dealStats: { completed: 0, failed: 0 },
     capability: clamp(0.35 + rand() * 0.75, 0.1, 1.15),
     need: Math.round(8 + rand() * 72),
     resources: 0,
@@ -194,7 +196,7 @@ function rand() {
 function step() {
   state.cycle += 1;
   const p = params();
-  driftTrust(p);
+  driftConditions(p);
   runCeremonyCycle(p);
   produceAttestations(p);
   allocateResources();
@@ -203,15 +205,24 @@ function step() {
   render();
 }
 
-function driftTrust(p) {
-  const members = activeMembers();
-  const mean = average(members.map((s) => s.trust));
+function driftConditions(p) {
   for (const s of state.stewards) {
-    const pull = s.member ? (mean - s.trust) * 0.035 : 0.01;
-    const noise = (rand() - 0.5) * (0.035 + p.objectionRate * 0.05);
-    s.trust = clamp(s.trust + pull + noise, 0.02, 0.99);
     s.need = clamp(s.need + Math.round((rand() - 0.42) * 10), 3, 96);
   }
+}
+
+function recomputeTrust(steward) {
+  const completed = steward.dealStats.completed;
+  const failed = steward.dealStats.failed;
+  const priorWeight = 8;
+  const total = completed + failed + priorWeight;
+  steward.trust = clamp((completed + steward.trustPrior * priorWeight) / total, 0.02, 0.99);
+}
+
+function noteDeal(steward, completed, failed = 0) {
+  steward.dealStats.completed += completed;
+  steward.dealStats.failed += failed;
+  recomputeTrust(steward);
 }
 
 function runCeremonyCycle(p) {
@@ -248,14 +259,14 @@ function runCeremonyCycle(p) {
   if (committed) {
     candidate.member = true;
     candidate.candidate = false;
-    candidate.trust = clamp(candidate.trust + 0.14 + sponsors.length * 0.012, 0.05, 0.96);
+    noteDeal(candidate, 2 + sponsors.length, 0);
     for (const s of sponsors.slice(0, p.sponsors)) {
-      s.trust = clamp(s.trust + 0.012, 0.02, 0.99);
+      noteDeal(s, 1, 0);
       recordAttestation("endorsement/1", "sponsor", { target: candidate.id, by: s.id });
     }
     logEvent("ceremony-record/1", `${candidate.label} admitted`, `${sponsors.length} sponsors, ${witnesses.length} witnesses, ${objections.length} objections.`);
   } else {
-    candidate.trust = clamp(candidate.trust - 0.045 - objections.length * 0.01, 0.02, 0.9);
+    noteDeal(candidate, 0, 1 + objections.length);
     for (const o of objections) {
       recordAttestation("objection/1", "procedural", { target: candidate.id, by: o.id });
     }
@@ -301,10 +312,6 @@ function produceAttestations(p) {
       by: steward.id,
       target: peer?.id
     });
-    steward.trust = clamp(steward.trust + 0.004, 0.02, 0.99);
-    if (peer) {
-      peer.trust = clamp(peer.trust + 0.002, 0.02, 0.99);
-    }
   }
 }
 
@@ -355,15 +362,20 @@ function runGoodsEconomy(p, options = {}) {
     let wanted = 0;
     let spent = 0;
     let primaryGood = null;
+    let failedTerms = 0;
     for (const item of basket) {
       wanted += item.want;
       if (item.want <= 0 || buyer.credits <= 0) {
+        if (item.want > 0) {
+          failedTerms += 1;
+        }
         continue;
       }
       const available = Math.max(0, item.good.supply - item.good.cleared);
       const affordable = buyer.credits / item.good.price;
       const quantity = Math.min(item.want, available, affordable);
       if (quantity <= 0) {
+        failedTerms += 1;
         continue;
       }
       buyer.inventory[item.good.id] = (buyer.inventory[item.good.id] || 0) + quantity;
@@ -376,7 +388,9 @@ function runGoodsEconomy(p, options = {}) {
       primaryGood = primaryGood || item.good.id;
     }
     buyer.satisfaction = wanted > 0 ? clamp(filled / wanted, 0, 1) : 1;
-    buyer.trust = clamp(buyer.trust + (buyer.satisfaction - 0.72) * 0.01, 0.02, 0.99);
+    const completedDeals = Math.floor(filled);
+    const unmetDeals = failedTerms + Math.floor(Math.max(0, wanted - filled));
+    noteDeal(buyer, completedDeals, unmetDeals);
     if (options.recordSignals !== false && spent > 0 && rand() < 0.08 + p.priceSignal * 0.12) {
       recordAttestation("purchase-decision/1", "buy", {
         by: buyer.id,
@@ -411,6 +425,7 @@ function attestPrices(p, members, options = {}) {
   for (const good of Object.values(state.market.goods)) {
     let weighted = 0;
     let weight = 0;
+    const quotes = [];
     for (const steward of witnesses) {
       const scarcity = (good.demand + 0.1) / (good.supply + 0.1);
       const sellerBias = steward.specialty === good.id ? 0.18 : 0;
@@ -419,16 +434,27 @@ function attestPrices(p, members, options = {}) {
       weighted += quote * steward.trust;
       weight += steward.trust;
       good.attestations += 1;
-      if (options.recordSignals !== false && rand() < p.priceSignal * 0.35) {
-        recordAttestation("price-signal/1", "quote", {
-          by: steward.id,
-          good: good.id,
-          quote: Number(quote.toFixed(2))
-        });
-      }
+      quotes.push({ steward, quote });
     }
     const attestedPrice = weight > 0 ? weighted / weight : good.price;
     good.pressure = weight > 0 ? (attestedPrice - good.price) / good.price : 0;
+    if (options.recordSignals !== false) {
+      for (const item of quotes) {
+        if (rand() >= p.priceSignal * 0.35) {
+          continue;
+        }
+        if (Math.abs(item.quote - attestedPrice) / Math.max(0.1, attestedPrice) < 0.35) {
+          noteDeal(item.steward, 1, 0);
+        } else {
+          noteDeal(item.steward, 0, 1);
+        }
+        recordAttestation("price-signal/1", "quote", {
+          by: item.steward.id,
+          good: good.id,
+          quote: Number(item.quote.toFixed(2))
+        });
+      }
+    }
   }
 }
 

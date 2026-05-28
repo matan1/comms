@@ -1,6 +1,6 @@
 # Comms Community Simulator
 
-Static browser demo for exploring community trust, ceremony commitment rules,
+Static browser demo for exploring community deal trust, ceremony commitment rules,
 attestation frequency, sponsor requirements, objections, and a seed-floor
 resource economy with a small goods market.
 
@@ -22,3 +22,7 @@ floating mode, prices move from supply/demand pressure plus trusted
 `price-signal/1` attestations emitted by market participants. Cycles also emit
 sampled `purchase-decision/1` records and a `market-clearing/1` decision so the
 price path remains auditable.
+
+Deal trust is derived from behavior: completed agreements raise it and failed
+negotiations lower it. The initial prior slider only seeds new stewards before
+their trade and ceremony history takes over.

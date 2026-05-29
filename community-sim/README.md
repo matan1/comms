@@ -26,3 +26,26 @@ price path remains auditable.
 Deal trust is derived from behavior: completed agreements raise it and failed
 negotiations lower it. The initial prior slider only seeds new stewards before
 their trade and ceremony history takes over.
+
+## Auto-Tune
+
+The Auto-Tune panel searches for balanced simulator parameters without any
+models, training, or network services. It runs candidate parameter sets
+off-screen — the visible simulation is never mutated until you apply a result —
+and ranks them against a "Healthy Balance" target: high mean deal trust, good
+market satisfaction, low unmet demand, moderate inequality, and continued
+ceremony/admission activity.
+
+Pick a search budget (Quick / Normal / Deep) and press **Run tune**. The tuner
+uses a deterministic randomized/grid hybrid: it always includes the current
+settings plus balanced anchors across the commit-rule and exchange-rate options,
+then fills the remaining budget with randomized samples over conservative ranges.
+Each candidate runs for a fixed horizon and is scored on the average of its
+recent cycles. Population and run speed are held fixed so candidates stay
+comparable to the current scenario.
+
+Ranked candidates show the score, deal trust, satisfaction, unmet demand, Gini,
+steward count, and an admission summary, with a short explanation of each
+candidate's strongest and weakest dimension and which controls it changes. Press
+**Apply** on a candidate to copy its settings into the live controls and reset
+the simulation.

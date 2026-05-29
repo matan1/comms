@@ -78,24 +78,50 @@ function byId(id) {
   return document.getElementById(id);
 }
 
-function params() {
+// Raw slider/select values, in the same units the DOM controls use.
+function rawFromControls() {
   return {
-    population: Number(controls.population.value),
-    trust: Number(controls.trust.value) / 100,
-    attestFreq: Number(controls.attestFreq.value),
-    objectionRate: Number(controls.objectionRate.value) / 100,
-    sponsors: Number(controls.sponsors.value),
-    witnessQuorum: Number(controls.witnessQuorum.value),
+    population: controls.population.value,
+    trust: controls.trust.value,
+    attestFreq: controls.attestFreq.value,
+    objectionRate: controls.objectionRate.value,
+    sponsors: controls.sponsors.value,
+    witnessQuorum: controls.witnessQuorum.value,
     commitRule: controls.commitRule.value,
-    pool: Number(controls.pool.value),
-    seedFloor: Number(controls.seedFloor.value) / 100,
-    cap: Number(controls.cap.value) / 100,
-    returnRate: Number(controls.returnRate.value) / 100,
+    pool: controls.pool.value,
+    seedFloor: controls.seedFloor.value,
+    cap: controls.cap.value,
+    returnRate: controls.returnRate.value,
     priceMode: controls.priceMode.value,
-    priceSignal: Number(controls.priceSignal.value) / 100,
-    productionVariance: Number(controls.productionVariance.value) / 100,
-    runSpeed: Number(controls.runSpeed.value)
+    priceSignal: controls.priceSignal.value,
+    productionVariance: controls.productionVariance.value,
+    runSpeed: controls.runSpeed.value
   };
+}
+
+// Convert raw control values into the normalized params the simulation runs on.
+function normalizeParams(raw) {
+  return {
+    population: Number(raw.population),
+    trust: Number(raw.trust) / 100,
+    attestFreq: Number(raw.attestFreq),
+    objectionRate: Number(raw.objectionRate) / 100,
+    sponsors: Number(raw.sponsors),
+    witnessQuorum: Number(raw.witnessQuorum),
+    commitRule: raw.commitRule,
+    pool: Number(raw.pool),
+    seedFloor: Number(raw.seedFloor) / 100,
+    cap: Number(raw.cap) / 100,
+    returnRate: Number(raw.returnRate) / 100,
+    priceMode: raw.priceMode,
+    priceSignal: Number(raw.priceSignal) / 100,
+    productionVariance: Number(raw.productionVariance) / 100,
+    runSpeed: Number(raw.runSpeed)
+  };
+}
+
+function params() {
+  return normalizeParams(rawFromControls());
 }
 
 function syncOutputs() {
@@ -119,8 +145,9 @@ function runDelay(speed) {
   return Math.round(1100 - speed * 95);
 }
 
-function reset() {
-  const p = params();
+// Build a fresh simulation state into the module-level `state` for params `p`.
+// Does not touch the DOM, so it is safe for both live reset and headless tuning.
+function seedState(p) {
   state = {
     cycle: 0,
     seed: 1337 + p.population * 17 + Math.round(p.trust * 100),
@@ -141,8 +168,12 @@ function reset() {
   }
 
   logEvent("rule/1", "Founding rule loaded", "Baseline trust, ceremony rule, and resource economy initialized.");
-  allocateResources();
+  allocateResources(p);
   runGoodsEconomy(p, { quiet: true, recordSignals: false });
+}
+
+function reset() {
+  seedState(params());
   render();
 }
 
@@ -193,15 +224,19 @@ function rand() {
   return x - Math.floor(x);
 }
 
-function step() {
+// One simulation cycle with no rendering or DOM access.
+function advanceCycle(p) {
   state.cycle += 1;
-  const p = params();
   driftConditions(p);
   runCeremonyCycle(p);
   produceAttestations(p);
-  allocateResources();
+  allocateResources(p);
   runGoodsEconomy(p);
   maybeReturnResources(p);
+}
+
+function step() {
+  advanceCycle(params());
   render();
 }
 
@@ -471,8 +506,7 @@ function updatePrices(p) {
   }
 }
 
-function allocateResources() {
-  const p = params();
+function allocateResources(p = params()) {
   const members = activeMembers();
   if (!members.length) {
     state.lastAllocation = [];
@@ -803,6 +837,300 @@ function exportSummary() {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// --- Auto-Tune -------------------------------------------------------------
+// A fully static, browser-side search for balanced simulator parameters.
+// Candidate parameter sets are evaluated off-screen (the live simulation is
+// never mutated) and ranked against a "Healthy Balance" target. No models,
+// training, or network services: the sim is small and deterministic, so a
+// direct randomized/grid hybrid search is a better fit than anything heavier.
+
+const tune = {
+  budget: byId("tuneBudget"),
+  runBtn: byId("tuneBtn"),
+  status: byId("tuneStatus"),
+  results: byId("tuneResults")
+};
+
+const tuneBudgets = {
+  quick: { label: "Quick", candidates: 14, horizon: 30, sample: 8 },
+  normal: { label: "Normal", candidates: 30, horizon: 42, sample: 12 },
+  deep: { label: "Deep", candidates: 64, horizon: 56, sample: 16 }
+};
+
+// Conservative ranges (in raw control units) for the parameters we tune.
+// Population and run speed are intentionally excluded so candidates stay
+// comparable to the user's current scenario.
+const tuneSpace = {
+  trust: { min: 45, max: 82, step: 1 },
+  attestFreq: { min: 3, max: 8, step: 1 },
+  objectionRate: { min: 2, max: 22, step: 1 },
+  sponsors: { min: 1, max: 4, step: 1 },
+  witnessQuorum: { min: 2, max: 6, step: 1 },
+  pool: { min: 160, max: 440, step: 10 },
+  seedFloor: { min: 12, max: 36, step: 1 },
+  cap: { min: 24, max: 52, step: 1 },
+  returnRate: { min: 4, max: 26, step: 1 },
+  priceSignal: { min: 20, max: 80, step: 5 },
+  productionVariance: { min: 8, max: 40, step: 2 }
+};
+const tuneCommitRules = ["sponsor-quorum", "majority", "unanimous-witnesses"];
+const tunePriceModes = ["floating", "fixed"];
+
+// Human-friendly labels for the parameters a candidate may change.
+const tuneLabels = {
+  trust: "Initial deal prior",
+  attestFreq: "Attestation frequency",
+  objectionRate: "Objection pressure",
+  sponsors: "Minimum sponsors",
+  witnessQuorum: "Witness quorum",
+  commitRule: "Commit rule",
+  pool: "Resource pool",
+  seedFloor: "Seed floor",
+  cap: "Per-steward cap",
+  returnRate: "Return culture",
+  priceMode: "Exchange rates",
+  priceSignal: "Price attestations",
+  productionVariance: "Production variance"
+};
+
+let tuning = false;
+
+// Small deterministic RNG (mulberry32) so a given budget/scenario always
+// produces the same candidate set and ranking.
+function makeRng(seed) {
+  let s = seed >>> 0;
+  return function rng() {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function sampleRange(rng, range) {
+  const raw = range.min + rng() * (range.max - range.min);
+  const stepped = Math.round(raw / range.step) * range.step;
+  return clamp(stepped, range.min, range.max);
+}
+
+function midRange(range) {
+  return clamp(Math.round((range.min + range.max) / 2 / range.step) * range.step, range.min, range.max);
+}
+
+// Randomized/grid hybrid: the current settings plus a grid of balanced anchors
+// over the categorical controls, then randomized fill across the ranges.
+function makeCandidates(budget) {
+  const rng = makeRng(0x51eed);
+  const base = rawFromControls();
+  const list = [{ ...base }];
+
+  for (const commitRule of tuneCommitRules) {
+    for (const priceMode of tunePriceModes) {
+      const raw = { ...base, commitRule, priceMode };
+      for (const key of Object.keys(tuneSpace)) {
+        raw[key] = midRange(tuneSpace[key]);
+      }
+      list.push(raw);
+    }
+  }
+
+  while (list.length < budget.candidates) {
+    const raw = { ...base };
+    for (const key of Object.keys(tuneSpace)) {
+      raw[key] = sampleRange(rng, tuneSpace[key]);
+    }
+    raw.commitRule = tuneCommitRules[Math.floor(rng() * tuneCommitRules.length)];
+    raw.priceMode = tunePriceModes[Math.floor(rng() * tunePriceModes.length)];
+    list.push(raw);
+  }
+
+  return list.slice(0, budget.candidates);
+}
+
+function snapshotMetrics() {
+  const members = activeMembers();
+  const totalDemand = Object.values(state.market.goods).reduce((sum, g) => sum + g.demand, 0);
+  return {
+    trust: average(members.map((s) => s.trust)),
+    satisfaction: average(members.map((s) => s.satisfaction)),
+    unmetFraction: totalDemand > 0 ? clamp(state.market.unmet / totalDemand, 0, 1) : 0,
+    gini: gini(state.lastAllocation.map((g) => g.grant)),
+    members: members.length
+  };
+}
+
+function aggregateSamples(samples) {
+  const keys = ["trust", "satisfaction", "unmetFraction", "gini", "members"];
+  const out = {};
+  for (const key of keys) {
+    out[key] = average(samples.map((s) => s[key]));
+  }
+  return out;
+}
+
+// Run one candidate off-screen and return its averaged recent-cycle metrics.
+// The live `state` is saved and restored, so the visible sim is untouched.
+function evaluateRaw(raw, budget) {
+  const p = normalizeParams(raw);
+  const saved = state;
+  try {
+    seedState(p);
+    const samples = [];
+    for (let c = 0; c < budget.horizon; c += 1) {
+      advanceCycle(p);
+      if (c >= budget.horizon - budget.sample) {
+        samples.push(snapshotMetrics());
+      }
+    }
+    const metrics = aggregateSamples(samples);
+    metrics.committed = state.attestations.filter((a) => a.type === "ceremony-record/1" && a.role === "committed").length;
+    metrics.held = state.attestations.filter((a) => a.type === "ceremony-record/1" && a.role === "held").length;
+    metrics.objections = state.attestations.filter((a) => a.type === "objection/1").length;
+    return metrics;
+  } finally {
+    state = saved;
+  }
+}
+
+// "Healthy Balance" objective: high deal trust and satisfaction, low unmet
+// demand, moderate inequality, and continued ceremony/admission activity.
+function scoreMetrics(m, budget) {
+  const trust = clamp(m.trust, 0, 1);
+  const satisfaction = clamp(m.satisfaction, 0, 1);
+  const coverage = clamp(1 - m.unmetFraction, 0, 1);
+  const giniHealth = clamp(1 - Math.abs(m.gini - 0.3) / 0.42, 0, 1);
+  const totalCeremonies = m.committed + m.held;
+  const admissionRate = totalCeremonies > 0 ? m.committed / totalCeremonies : 0;
+  const activity = clamp(totalCeremonies / Math.max(1, budget.horizon * 0.5), 0, 1);
+  const admissionHealth = totalCeremonies > 0 ? 0.55 * admissionRate + 0.45 * activity : 0.2;
+
+  const parts = {
+    trust: 0.3 * trust,
+    satisfaction: 0.26 * satisfaction,
+    coverage: 0.18 * coverage,
+    gini: 0.16 * giniHealth,
+    admission: 0.1 * admissionHealth
+  };
+  const score = parts.trust + parts.satisfaction + parts.coverage + parts.gini + parts.admission;
+  return { score, parts, trust, satisfaction, coverage, giniHealth, admissionRate, admissionHealth, totalCeremonies };
+}
+
+function tunePct(value) {
+  return `${Math.round(value * 100)}%`;
+}
+
+// Explain why a candidate ranked where it did, by its strongest and weakest
+// normalized components.
+function explainCandidate(sc) {
+  const comps = [
+    { key: "deal trust", v: sc.trust },
+    { key: "market satisfaction", v: sc.satisfaction },
+    { key: "demand coverage", v: sc.coverage },
+    { key: "balanced inequality", v: sc.giniHealth },
+    { key: "admission activity", v: sc.admissionHealth }
+  ];
+  const sorted = [...comps].sort((a, b) => b.v - a.v);
+  const best = sorted[0];
+  const worst = sorted[sorted.length - 1];
+  return `Strong ${best.key} (${tunePct(best.v)}); weakest on ${worst.key} (${tunePct(worst.v)}).`;
+}
+
+// Tuned fields whose value differs from the user's current settings.
+function changedFields(raw, base) {
+  return Object.keys(tuneLabels).filter((key) => String(raw[key]) !== String(base[key]));
+}
+
+function describeValue(key, raw) {
+  if (key === "commitRule" || key === "priceMode") {
+    return raw[key];
+  }
+  const percentKeys = ["trust", "objectionRate", "seedFloor", "cap", "returnRate", "priceSignal", "productionVariance"];
+  return percentKeys.includes(key) ? `${raw[key]}%` : String(raw[key]);
+}
+
+function renderTuneResults(scored, base) {
+  tune.results.innerHTML = "";
+  scored.forEach((entry, index) => {
+    const { raw, metrics: m, sc } = entry;
+    const li = document.createElement("li");
+    li.className = "tune-card";
+
+    const changes = changedFields(raw, base);
+    const changeText = changes.length
+      ? changes.map((key) => `${tuneLabels[key]}: ${describeValue(key, raw)}`).join(" · ")
+      : "Matches current settings";
+
+    li.innerHTML = `
+      <div class="tune-card-head">
+        <span class="tune-rank">#${index + 1}</span>
+        <span class="tune-score">score ${sc.score.toFixed(2)}</span>
+        <button type="button" class="tune-apply">Apply</button>
+      </div>
+      <p class="tune-explain">${explainCandidate(sc)}</p>
+      <dl class="tune-metrics">
+        <div><dt>deal trust</dt><dd>${tunePct(m.trust)}</dd></div>
+        <div><dt>satisfaction</dt><dd>${tunePct(m.satisfaction)}</dd></div>
+        <div><dt>unmet demand</dt><dd>${tunePct(m.unmetFraction)}</dd></div>
+        <div><dt>gini</dt><dd>${m.gini.toFixed(2)}</dd></div>
+        <div><dt>stewards</dt><dd>${Math.round(m.members)}</dd></div>
+        <div><dt>admits</dt><dd>${m.committed}/${m.committed + m.held}</dd></div>
+      </dl>
+      <p class="tune-changes">${changeText}</p>
+    `;
+    li.querySelector(".tune-apply").addEventListener("click", () => applyCandidate(raw));
+    tune.results.appendChild(li);
+  });
+}
+
+function applyCandidate(raw) {
+  stop();
+  for (const [key, ctrl] of Object.entries(controls)) {
+    if (key in raw) {
+      ctrl.value = raw[key];
+    }
+  }
+  syncOutputs();
+  reset();
+  tune.status.textContent = "Applied candidate. Sim reset with the new parameters.";
+}
+
+function nextTick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function runTune() {
+  if (tuning) {
+    return;
+  }
+  tuning = true;
+  stop();
+  tune.runBtn.disabled = true;
+  tune.results.innerHTML = "";
+
+  const budget = tuneBudgets[tune.budget.value] || tuneBudgets.normal;
+  const base = rawFromControls();
+  const candidates = makeCandidates(budget);
+  const scored = [];
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const raw = candidates[i];
+    const metrics = evaluateRaw(raw, budget);
+    scored.push({ raw, metrics, sc: scoreMetrics(metrics, budget) });
+    tune.status.textContent = `Evaluating ${i + 1}/${candidates.length} candidates…`;
+    await nextTick();
+  }
+
+  scored.sort((a, b) => b.sc.score - a.sc.score);
+  const shown = scored.slice(0, 5);
+  renderTuneResults(shown, base);
+  tune.status.textContent = `Done. Ranked ${scored.length} candidates; showing top ${shown.length}. Run paused.`;
+  tune.runBtn.disabled = false;
+  tuning = false;
+}
+
+tune.runBtn.addEventListener("click", runTune);
 
 for (const input of Object.values(controls)) {
   input.addEventListener("input", () => {

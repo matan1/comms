@@ -448,6 +448,96 @@ td.down {
   color: var(--muted);
 }
 
+.tune-run {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.tune-run:hover {
+  border-color: var(--green);
+  background: #2a7059;
+}
+
+.tune-status {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.tune-results {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tune-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fbfcf8;
+}
+
+.tune-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tune-rank {
+  font-weight: 850;
+}
+
+.tune-score {
+  color: var(--green);
+  font-weight: 800;
+}
+
+.tune-card-head .tune-apply {
+  min-height: 30px;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 12px;
+  font-size: 0.8rem;
+}
+
+.tune-explain {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.tune-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 8px;
+  margin: 9px 0 0;
+}
+
+.tune-metrics div {
+  min-width: 0;
+}
+
+.tune-metrics dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tune-metrics dd {
+  margin: 1px 0 0;
+  font-weight: 800;
+}
+
+.tune-changes {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 @media (max-width: 1180px) {
   .workspace,
   .main-grid {

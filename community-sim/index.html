@@ -122,6 +122,30 @@
               <output id="productionVarianceOut"></output>
             </label>
           </div>
+
+          <div class="control-group tuner">
+            <h2>Auto-Tune</h2>
+            <label>
+              Target
+              <select id="tuneTarget" disabled title="Fixed to Healthy Balance in this version">
+                <option value="healthy-balance">Healthy Balance</option>
+              </select>
+            </label>
+            <label>
+              Search budget
+              <select id="tuneBudget">
+                <option value="quick">Quick</option>
+                <option value="normal" selected>Normal</option>
+                <option value="deep">Deep</option>
+              </select>
+            </label>
+            <button id="tuneBtn" type="button" class="primary tune-run" title="Search for balanced parameters">
+              <span aria-hidden="true">~</span>
+              <span>Run tune</span>
+            </button>
+            <p id="tuneStatus" class="tune-status">Idle. Searches parameters against the current population and run speed; previews results before changing live controls.</p>
+            <ol id="tuneResults" class="tune-results"></ol>
+          </div>
         </aside>
 
         <section class="stage" aria-label="Simulation output">

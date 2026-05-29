@@ -57,6 +57,8 @@ const ui = {
   eventLog: byId("eventLog"),
   allocationTable: byId("allocationTable"),
   marketTable: byId("marketTable"),
+  ledgerHead: byId("ledgerHead"),
+  ledgerTable: byId("ledgerTable"),
   cycleMetric: byId("cycleMetric"),
   membersMetric: byId("membersMetric"),
   trustMetric: byId("trustMetric"),
@@ -210,6 +212,7 @@ function makeSteward(index, baselineTrust, member) {
     resources: 0,
     credits: 0,
     satisfaction: 1,
+    activity: { produced: 0, bought: 0, spent: 0 },
     specialty: goods[index % goods.length].id,
     inventory: Object.fromEntries(goods.map((g) => [g.id, 0])),
     demandBias: Object.fromEntries(goods.map((g) => [g.id, 0.75 + rand() * 0.65])),
@@ -365,6 +368,9 @@ function runGoodsEconomy(p, options = {}) {
 
   for (const steward of members) {
     steward.credits = steward.resources;
+    // Reset this-cycle activity here so re-runs (live preview on a control
+    // change, or a fresh advanceCycle) recompute it idempotently.
+    steward.activity = { produced: 0, bought: 0, spent: 0 };
     for (const key of Object.keys(steward.inventory)) {
       steward.inventory[key] *= 0.25;
     }
@@ -373,6 +379,7 @@ function runGoodsEconomy(p, options = {}) {
     const amount = Math.max(0, (0.8 + steward.capability * 2.4) * (0.65 + steward.trust) * variance);
     steward.inventory[produced.id] += amount;
     produced.supply += amount;
+    steward.activity.produced = amount;
 
     for (const good of marketRows) {
       const demand = good.baseDemand * steward.demandBias[good.id] * (0.78 + (1 - steward.trust) * 0.35);
@@ -423,6 +430,8 @@ function runGoodsEconomy(p, options = {}) {
       primaryGood = primaryGood || item.good.id;
     }
     buyer.satisfaction = wanted > 0 ? clamp(filled / wanted, 0, 1) : 1;
+    buyer.activity.bought = filled;
+    buyer.activity.spent = spent;
     const completedDeals = Math.floor(filled);
     const unmetDeals = failedTerms + Math.floor(Math.max(0, wanted - filled));
     noteDeal(buyer, completedDeals, unmetDeals);
@@ -633,6 +642,7 @@ function render() {
   ui.marketLabel.textContent = `${params().priceMode}; ${state.market.volume.toFixed(0)} traded`;
   renderAllocation();
   renderMarket();
+  renderLedger();
   renderEvents();
   drawNetwork();
   drawAudit();
@@ -677,6 +687,93 @@ function renderMarket() {
   }
 }
 
+// Columns for the per-steward "this cycle" ledger. `key` doubles as both the
+// row field and the sort key; `label` is the header text.
+const ledgerColumns = [
+  { key: "label", label: "Steward" },
+  { key: "produced", label: "Produced" },
+  { key: "bought", label: "Bought" },
+  { key: "grant", label: "Grant" },
+  { key: "sponsored", label: "Sponsored" },
+  { key: "objected", label: "Objected" },
+  { key: "returned", label: "Returned" }
+];
+
+// Active sort: most-productive stewards first by default.
+let ledgerSort = { key: "produced", dir: -1 };
+
+// Assemble each active steward's activity for the current cycle. Economic
+// figures come from the steward's per-cycle `activity` (set in runGoodsEconomy);
+// the grant comes from the latest allocation; sponsorships, objections, and
+// returns are read straight from this cycle's attestation log.
+function currentLedger() {
+  const grants = new Map(state.lastAllocation.map((g) => [g.steward.id, g.grant]));
+  const sponsored = new Map();
+  const objected = new Map();
+  const returned = new Map();
+  for (const att of state.attestations) {
+    if (att.cycle !== state.cycle) {
+      continue;
+    }
+    if (att.type === "endorsement/1") {
+      sponsored.set(att.detail.by, (sponsored.get(att.detail.by) || 0) + 1);
+    } else if (att.type === "objection/1") {
+      objected.set(att.detail.by, (objected.get(att.detail.by) || 0) + 1);
+    } else if (att.type === "allocation-return/1") {
+      returned.set(att.detail.by, (returned.get(att.detail.by) || 0) + Number(att.detail.amount));
+    }
+  }
+  return activeMembers().map((s) => ({
+    label: s.label,
+    produced: s.activity ? s.activity.produced : 0,
+    bought: s.activity ? s.activity.bought : 0,
+    grant: grants.has(s.id) ? grants.get(s.id) : s.resources,
+    sponsored: sponsored.get(s.id) || 0,
+    objected: objected.get(s.id) || 0,
+    returned: returned.get(s.id) || 0
+  }));
+}
+
+function renderLedger() {
+  const rows = currentLedger();
+  const { key, dir } = ledgerSort;
+  rows.sort((a, b) => {
+    if (key === "label") {
+      return dir * a.label.localeCompare(b.label);
+    }
+    return dir * (a[key] - b[key]) || a.label.localeCompare(b.label);
+  });
+
+  ui.ledgerHead.innerHTML = "";
+  const headRow = document.createElement("tr");
+  for (const col of ledgerColumns) {
+    const th = document.createElement("th");
+    th.textContent = col.label;
+    th.dataset.key = col.key;
+    th.className = "ledger-sortable";
+    if (col.key === key) {
+      th.classList.add(dir < 0 ? "sort-desc" : "sort-asc");
+    }
+    headRow.appendChild(th);
+  }
+  ui.ledgerHead.appendChild(headRow);
+
+  ui.ledgerTable.innerHTML = "";
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${row.label}</td>
+      <td>${row.produced.toFixed(1)}</td>
+      <td>${row.bought.toFixed(1)}</td>
+      <td>${row.grant.toFixed(1)}</td>
+      <td>${row.sponsored || ""}</td>
+      <td>${row.objected || ""}</td>
+      <td>${row.returned ? row.returned.toFixed(1) : ""}</td>
+    `;
+    ui.ledgerTable.appendChild(tr);
+  }
+}
+
 function renderEvents() {
   ui.eventLog.innerHTML = "";
   for (const event of state.events.slice(0, 24)) {
@@ -698,20 +795,17 @@ function drawNetwork() {
   ctx.fillStyle = "#fbfcf8";
   ctx.fillRect(0, 0, w, h);
 
-  const members = activeMembers();
-  ctx.lineWidth = 1;
-  for (const s of state.stewards) {
-    if (!s.member) {
-      continue;
-    }
-    const sponsors = members.filter((m) => m.id !== s.id && randForPair(s.id, m.id) < 0.08 + s.trust * m.trust * 0.07);
-    for (const t of sponsors.slice(0, 3)) {
-      ctx.strokeStyle = `rgba(46, 111, 158, ${0.08 + Math.min(s.trust, t.trust) * 0.22})`;
-      ctx.beginPath();
-      ctx.moveTo(s.x * w, s.y * h);
-      ctx.lineTo(t.x * w, t.y * h);
-      ctx.stroke();
-    }
+  // Real social flows from the audit log, aged so the current cycle reads
+  // strongest and older activity fades out over the window.
+  for (const edge of recentSocialEdges()) {
+    const style = socialEdgeStyle[edge.type];
+    const alpha = 0.12 + 0.62 * (1 - edge.age / SOCIAL_EDGE_WINDOW);
+    ctx.strokeStyle = `rgba(${style.color}, ${alpha.toFixed(3)})`;
+    ctx.lineWidth = edge.age === 0 ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(edge.from.x * w, edge.from.y * h);
+    ctx.lineTo(edge.to.x * w, edge.to.y * h);
+    ctx.stroke();
   }
 
   for (const s of state.stewards) {
@@ -739,13 +833,46 @@ function drawNetwork() {
   }
 }
 
-function randForPair(a, b) {
-  let hash = 0;
-  const key = `${a}:${b}:${state.cycle}`;
-  for (let i = 0; i < key.length; i += 1) {
-    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+// How many cycles of social activity stay visible on the network before fading.
+const SOCIAL_EDGE_WINDOW = 3;
+
+// Pairwise attestation types that draw as network edges, with their rgb stroke
+// (endorsement = blue, objection = red, recognition/general-claim = teal).
+const socialEdgeStyle = {
+  "endorsement/1": { color: "46, 111, 158", label: "endorsement" },
+  "objection/1": { color: "182, 83, 69", label: "objection" },
+  "recognition/1": { color: "79, 143, 139", label: "recognition" },
+  "general-claim/1": { color: "79, 143, 139", label: "recognition" }
+};
+
+// Build the real per-cycle social edges from the attestation log: pairwise
+// endorsements, objections, and peer recognition within the recent window,
+// resolved to steward nodes and tagged with their age in cycles. One edge per
+// (type, by, target), keeping the most recent. Replaces the old decorative
+// randForPair edges, which corresponded to no actual event.
+function recentSocialEdges(window = SOCIAL_EDGE_WINDOW) {
+  const stewardsById = new Map(state.stewards.map((s) => [s.id, s]));
+  const edges = new Map();
+  for (const att of state.attestations) {
+    if (!socialEdgeStyle[att.type]) {
+      continue;
+    }
+    const age = state.cycle - att.cycle;
+    if (age < 0 || age >= window) {
+      continue;
+    }
+    const from = stewardsById.get(att.detail.by);
+    const to = stewardsById.get(att.detail.target);
+    if (!from || !to || from === to) {
+      continue;
+    }
+    const key = `${att.type}|${att.detail.by}|${att.detail.target}`;
+    const existing = edges.get(key);
+    if (!existing || age < existing.age) {
+      edges.set(key, { from, to, type: att.type, age });
+    }
   }
-  return (hash % 1000) / 1000;
+  return Array.from(edges.values());
 }
 
 function colorForTrust(value) {
@@ -1162,6 +1289,22 @@ ui.runBtn.addEventListener("click", () => {
   }
 });
 ui.exportBtn.addEventListener("click", exportSummary);
+
+// Click a ledger header to re-sort; clicking the active column flips direction.
+ui.ledgerHead.addEventListener("click", (event) => {
+  const th = event.target.closest("th[data-key]");
+  if (!th) {
+    return;
+  }
+  const key = th.dataset.key;
+  if (ledgerSort.key === key) {
+    ledgerSort.dir *= -1;
+  } else {
+    ledgerSort = { key, dir: key === "label" ? 1 : -1 };
+  }
+  renderLedger();
+});
+
 window.addEventListener("resize", render);
 
 function start() {

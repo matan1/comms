@@ -296,6 +296,24 @@ canvas {
   background: var(--blue);
 }
 
+.legend i.edge {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.legend .endorse {
+  background: #2e6f9e;
+}
+
+.legend .object {
+  background: #b65345;
+}
+
+.legend .recognize {
+  background: #4f8f8b;
+}
+
 .status-pill {
   max-width: 190px;
   overflow: hidden;
@@ -368,6 +386,34 @@ canvas {
 
 .market-panel {
   min-height: 260px;
+}
+
+.ledger-panel {
+  grid-column: 1 / -1;
+}
+
+.ledger-wrap {
+  max-height: 300px;
+  overflow: auto;
+}
+
+.ledger-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.ledger-sortable:hover {
+  color: var(--ink);
+}
+
+.ledger-sortable.sort-asc::after {
+  content: " \25B2";
+  font-size: 0.7em;
+}
+
+.ledger-sortable.sort-desc::after {
+  content: " \25BC";
+  font-size: 0.7em;
 }
 
 table {

@@ -247,7 +247,95 @@ output {
 }
 
 .network-panel {
+  position: relative;
   grid-row: span 2;
+}
+
+#networkCanvas {
+  cursor: pointer;
+}
+
+.inspector {
+  position: absolute;
+  top: 62px;
+  right: 14px;
+  width: 224px;
+  z-index: 2;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: var(--shadow);
+  padding: 12px 12px 11px;
+}
+
+.inspector-close {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  min-height: 24px;
+  min-width: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-right: 20px;
+}
+
+.inspector-head i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+
+.inspector-head strong {
+  font-size: 0.98rem;
+}
+
+.inspector-head span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.inspector-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+  margin: 11px 0 0;
+}
+
+.inspector-stats dt {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.inspector-stats dd {
+  margin: 1px 0 0;
+  font-weight: 800;
+}
+
+.inspector-cycle {
+  margin: 11px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+tr.row-selected td {
+  background: rgba(46, 111, 158, 0.12);
 }
 
 canvas {

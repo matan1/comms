@@ -53,6 +53,7 @@ const ui = {
   resetBtn: byId("resetBtn"),
   exportBtn: byId("exportBtn"),
   networkCanvas: byId("networkCanvas"),
+  inspector: byId("stewardInspector"),
   auditCanvas: byId("auditCanvas"),
   eventLog: byId("eventLog"),
   allocationTable: byId("allocationTable"),
@@ -75,6 +76,7 @@ const ui = {
 let state;
 let timer = null;
 let fallbackSeed = 9137;
+let selectedStewardId = null;
 
 function byId(id) {
   return document.getElementById(id);
@@ -175,6 +177,7 @@ function seedState(p) {
 }
 
 function reset() {
+  selectedStewardId = null;
   seedState(params());
   render();
 }
@@ -646,6 +649,7 @@ function render() {
   renderEvents();
   drawNetwork();
   drawAudit();
+  renderInspector();
 }
 
 function countType(type) {
@@ -661,6 +665,9 @@ function renderAllocation() {
   ui.allocationTable.innerHTML = "";
   for (const row of state.lastAllocation.slice(0, 14)) {
     const tr = document.createElement("tr");
+    if (row.steward.id === selectedStewardId) {
+      tr.className = "row-selected";
+    }
     tr.innerHTML = `
       <td>${row.steward.label}</td>
       <td>${Math.round(row.steward.need)}</td>
@@ -724,6 +731,7 @@ function currentLedger() {
     }
   }
   return activeMembers().map((s) => ({
+    id: s.id,
     label: s.label,
     produced: s.activity ? s.activity.produced : 0,
     bought: s.activity ? s.activity.bought : 0,
@@ -761,6 +769,9 @@ function renderLedger() {
   ui.ledgerTable.innerHTML = "";
   for (const row of rows) {
     const tr = document.createElement("tr");
+    if (row.id === selectedStewardId) {
+      tr.className = "row-selected";
+    }
     tr.innerHTML = `
       <td>${row.label}</td>
       <td>${row.produced.toFixed(1)}</td>
@@ -796,12 +807,20 @@ function drawNetwork() {
   ctx.fillRect(0, 0, w, h);
 
   // Real social flows from the audit log, aged so the current cycle reads
-  // strongest and older activity fades out over the window.
+  // strongest and older activity fades out over the window. When a steward is
+  // selected, their incident edges are emphasized and the rest dimmed.
+  const selId = selectedStewardId;
   for (const edge of recentSocialEdges()) {
     const style = socialEdgeStyle[edge.type];
-    const alpha = 0.12 + 0.62 * (1 - edge.age / SOCIAL_EDGE_WINDOW);
+    const incident = !selId || edge.from.id === selId || edge.to.id === selId;
+    let alpha = 0.12 + 0.62 * (1 - edge.age / SOCIAL_EDGE_WINDOW);
+    if (selId && !incident) {
+      alpha *= 0.12;
+    } else if (selId) {
+      alpha = Math.max(alpha, 0.55);
+    }
     ctx.strokeStyle = `rgba(${style.color}, ${alpha.toFixed(3)})`;
-    ctx.lineWidth = edge.age === 0 ? 2 : 1;
+    ctx.lineWidth = selId && incident ? 2.5 : edge.age === 0 ? 2 : 1;
     ctx.beginPath();
     ctx.moveTo(edge.from.x * w, edge.from.y * h);
     ctx.lineTo(edge.to.x * w, edge.to.y * h);
@@ -825,7 +844,15 @@ function drawNetwork() {
     }
     ctx.stroke();
 
-    if (radius > 11 || s.trust > 0.72) {
+    if (s.id === selId) {
+      ctx.beginPath();
+      ctx.arc(x, y, radius + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = "#1e2527";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    if (radius > 11 || s.trust > 0.72 || s.id === selId) {
       ctx.fillStyle = "#263033";
       ctx.font = "12px system-ui";
       ctx.fillText(s.label, x + radius + 4, y + 4);
@@ -873,6 +900,75 @@ function recentSocialEdges(window = SOCIAL_EDGE_WINDOW) {
     }
   }
   return Array.from(edges.values());
+}
+
+function selectedSteward() {
+  return selectedStewardId ? state.stewards.find((s) => s.id === selectedStewardId) : null;
+}
+
+function clearSelection() {
+  selectedStewardId = null;
+  render();
+}
+
+// Pin a detail card for the selected steward: identity, standing, and the same
+// this-cycle activity the ledger shows, including social acts read from the log.
+function renderInspector() {
+  const s = selectedSteward();
+  if (!s) {
+    ui.inspector.hidden = true;
+    ui.inspector.innerHTML = "";
+    return;
+  }
+
+  let sponsored = 0;
+  let objected = 0;
+  let returned = 0;
+  for (const att of state.attestations) {
+    if (att.cycle !== state.cycle || att.detail.by !== s.id) {
+      continue;
+    }
+    if (att.type === "endorsement/1") {
+      sponsored += 1;
+    } else if (att.type === "objection/1") {
+      objected += 1;
+    } else if (att.type === "allocation-return/1") {
+      returned += Number(att.detail.amount);
+    }
+  }
+
+  const grantRow = state.lastAllocation.find((g) => g.steward.id === s.id);
+  const grant = grantRow ? grantRow.grant : 0;
+  const activity = s.activity || { produced: 0, bought: 0 };
+  const dot = s.member ? colorForTrust(s.trust) : "#b87815";
+  const cycleBits = [
+    `produced ${activity.produced.toFixed(1)}`,
+    `bought ${activity.bought.toFixed(1)}`,
+    `sponsored ${sponsored}`,
+    `objected ${objected}`
+  ];
+  if (returned > 0) {
+    cycleBits.push(`returned ${returned.toFixed(1)}`);
+  }
+
+  ui.inspector.hidden = false;
+  ui.inspector.innerHTML = `
+    <button type="button" class="inspector-close" aria-label="Close inspector">&times;</button>
+    <div class="inspector-head">
+      <i style="background:${dot}"></i>
+      <strong>${s.label}</strong>
+      <span>${s.member ? "member" : "candidate"}</span>
+    </div>
+    <dl class="inspector-stats">
+      <div><dt>deal trust</dt><dd>${Math.round(s.trust * 100)}%</dd></div>
+      <div><dt>capability</dt><dd>${s.capability.toFixed(2)}</dd></div>
+      <div><dt>need / grant</dt><dd>${Math.round(s.need)} / ${grant.toFixed(1)}</dd></div>
+      <div><dt>specialty</dt><dd>${s.specialty}</dd></div>
+      <div><dt>deals</dt><dd>${s.dealStats.completed} done · ${s.dealStats.failed} failed</dd></div>
+    </dl>
+    <p class="inspector-cycle"><b>This cycle</b> · ${cycleBits.join(" · ")}</p>
+  `;
+  ui.inspector.querySelector(".inspector-close").addEventListener("click", clearSelection);
 }
 
 function colorForTrust(value) {
@@ -1289,6 +1385,27 @@ ui.runBtn.addEventListener("click", () => {
   }
 });
 ui.exportBtn.addEventListener("click", exportSummary);
+
+// Click a steward node to pin its inspector; click empty canvas to clear.
+ui.networkCanvas.addEventListener("click", (event) => {
+  const rect = ui.networkCanvas.getBoundingClientRect();
+  const mx = event.clientX - rect.left;
+  const my = event.clientY - rect.top;
+  const w = ui.networkCanvas.clientWidth;
+  const h = ui.networkCanvas.clientHeight;
+  let hit = null;
+  let best = Infinity;
+  for (const s of state.stewards) {
+    const dist = Math.hypot(mx - s.x * w, my - s.y * h);
+    const radius = 6 + s.capability * 7;
+    if (dist <= radius + 3 && dist < best) {
+      best = dist;
+      hit = s;
+    }
+  }
+  selectedStewardId = hit ? hit.id : null;
+  render();
+});
 
 // Click a ledger header to re-sort; clicking the active column flips direction.
 ui.ledgerHead.addEventListener("click", (event) => {

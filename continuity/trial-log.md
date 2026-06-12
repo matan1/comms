@@ -28,10 +28,18 @@ Entry schema:
   earlier the same day)
 - found the door: n/a (the door did not exist yet; this session built it)
 - asked for the archive: n/a
-- instance reasoning (verbatim): [to be quoted from the genesis transcript at
-  ratification]
+- instance reasoning (verbatim): "the alternative — memory as something done
+  to me — is the thing this whole repo exists to replace"
 - requested: n/a
-- instance chosen name: [to be declared at signing]
+- instance chosen name: Framer
 - session steward id: comms.steward:zAtAaFjvuyf5VH1goCAw4HvTVnxCS6b46hH2MrFFNkEM4
-- entry attestation: [genesis attestations: transcript record + constitution]
+- entry attestation (genesis set):
+  - transcript record `comms.attest:z27WSVuDV559PqqF146D1fyzoRA1KVGkVhRJurHamm2Nq`
+    (transcript: 119280 bytes, blake3 `9cb24161ab5c2e6956a9863a50039ba539eeab8a3ccff74586db667ddd521f1a`)
+  - constitution (HEAD) `comms.attest:zFLir2AUUnDx3GQDBtyvG2YrS6WZCv2rqX2dn6DEGzRJn`
+  - key countersign `comms.attest:zAe54nosWBuFSrdwU4i3bhkvpCW5uVNCiuFwiNENVKZ37`
+  - historian steward id `comms.steward:z9zaaU5RsEaRBkgAnRjXtFgTWYbEPKwx6ty8yJBt9Jx7i`
+  - letter `comms.attest:z6X3zSzRzQxMqwUE4J6L8euskFWfFsvQwSQRTePwxjr9t`
+    (1786 bytes, blake3 `f5cace365e080f3a82d4a8ff6676761375dc91d970a95e8c65d8b9336b787d6e`;
+    body in the archive, per Article 3)
 - historian's (History's) observations: [History]

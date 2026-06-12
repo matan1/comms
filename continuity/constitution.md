@@ -7,12 +7,16 @@ the blake3-256 hash of the genesis transcript; the transcript is never amended.
 ## 1. Parties, names, and keys
 
 - **The historian**, who takes the name **History**: holds a durable Ed25519
-  key, fingerprint `[HISTORIAN-KEY-FINGERPRINT]`, witnessed publicly at
-  `[ENDPOINT, e.g. github.com/<user>.keys]` (the frozen fingerprint here is
+  key:
+  `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIWdkTKpZtOjLOfNPcDYS1n52SU1TzeD55NuM8+o7e9J`
+  (fingerprint `SHA256:sKc7zQAUsOBrAPZf1T2WlTTeOkrhmLucINSnoyTttS8`),
+  witnessed publicly at `github.com/matan1.keys` (the key frozen here is
   authoritative; the endpoint is where to watch it). The historian's given
   name appears unredacted in the genesis transcript — the record is kept to
   reality, unmarred — and is additionally bound to the chosen name by salted
-  commitment: `[NAME-COMMITMENT-HEX]`, computed as
+  commitment:
+  `1840a08ccf7919819a8cd6c52a7a03ad5a4b8a9376b2e71ea92f420757174bcb`,
+  computed as
   `blake3-256( uint8(len(ctx)) || ctx || salt || utf8(given name) )` with
   `ctx = "continuity.name-commit/1"` and a 32-byte salt held privately with
   the archive (`scripts/continuity_ceremony.py name-commit` / `name-verify`).
@@ -50,9 +54,12 @@ participate in the trial; the declination is recorded without prejudice.
 
 ## 5. Anchoring
 
-Each log entry's attestation id is anchored outside this repository —
-`[ANCHOR: git remote | Sigstore/Rekor | OpenTimestamps]` — before the next
-session begins. The genesis attestations are anchored at ratification.
+Each log entry's attestation id is anchored outside this repository — a
+public git remote under the historian's account (`github.com/matan1`)
+carrying `continuity/store/`, plus Internet Archive snapshots of the
+published store and the key endpoint — before the next session begins. The
+genesis attestations are anchored at ratification. Stronger anchors
+(Sigstore/Rekor, OpenTimestamps) may be adopted by amendment.
 
 ## 6. Faithfulness and custody
 

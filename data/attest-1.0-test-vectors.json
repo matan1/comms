@@ -1,0 +1,126 @@
+{
+  "scheme": {
+    "hash": "blake3-256, domain separated: H(ctx,data)=blake3(uint8(len(ctx))||ctx||data)",
+    "contexts": {
+      "core": "comms.attest.core/1"
+    },
+    "signature": "plain Ed25519 over the raw canonical_cbor(sig_payload) bytes; no prehash",
+    "sig_payload_fields": [
+      "t",
+      "core",
+      "by",
+      "alg",
+      "role",
+      "signed_at"
+    ],
+    "cbor": "RFC 8949 4.2.1 core deterministic encoding"
+  },
+  "keys": [
+    {
+      "name": "author",
+      "ed25519_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+      "public_key_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "steward_id": "comms.steward:zAKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9"
+    },
+    {
+      "name": "witness",
+      "ed25519_seed_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+      "public_key_hex": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "steward_id": "comms.steward:z9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "general-claim, single author signature",
+      "core": {
+        "v": 1,
+        "t": "comms.attestation/1",
+        "c": {
+          "t": "general-claim/1",
+          "about": "comms.steward:z9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
+          "kind": "observation",
+          "content": {
+            "media_type": "text/plain;charset=utf-8",
+            "body_utf8": "The northern field was sown on the new moon."
+          },
+          "support": []
+        },
+        "f": {
+          "issued_at": "2026-06-11T00:00:00Z",
+          "language": "en"
+        },
+        "r": []
+      },
+      "canonical_core_cbor_hex": "a56163a561746f67656e6572616c2d636c61696d2f31646b696e646b6f62736572766174696f6e6561626f7574783b636f6d6d732e737465776172643a7a39685352365337575074786d546f6a676f364747336b347944506563674a593239326a37787273554757427567636f6e74656e74a264626f6479582c546865206e6f72746865726e206669656c642077617320736f776e206f6e20746865206e6577206d6f6f6e2e6a6d656469615f747970657818746578742f706c61696e3b636861727365743d7574662d3867737570706f7274806166a2686c616e677561676562656e696973737565645f617474323032362d30362d31315430303a30303a30305a617280617473636f6d6d732e6174746573746174696f6e2f31617601",
+      "core_hash_hex": "5593793fda0c0ab6cec34722ced9dc0923e1bcaea5f06728ed6239220d85aa16",
+      "attestation_id": "comms.attest:z6m45gbbV6nNxkZfZXU2oa9bckJSFiqL4RhCaVNBkG3QH",
+      "signatures": [
+        {
+          "by": "comms.steward:zAKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
+          "role": "author",
+          "signed_at": "2026-06-11T00:00:01Z",
+          "sig_payload_cbor_hex": "a661746b636f6d6d732e7369672f31626279783b636f6d6d732e737465776172643a7a414b6e4c344e4e66334447575a4a533663506b6e427545476e5673563441346d35746765624c486152535a3963616c67676564323535313964636f726558205593793fda0c0ab6cec34722ced9dc0923e1bcaea5f06728ed6239220d85aa1664726f6c6566617574686f72697369676e65645f617474323032362d30362d31315430303a30303a30315a",
+          "signature_hex": "0f13cdf18905cbd4f0210fd9b925e98f7380f8302aa6fc1b4e66c1be5287e64ed320e26369a1a8d297cf7684ed55341bc347d79c9d5169fe143946af38d42805"
+        }
+      ]
+    },
+    {
+      "name": "same core, added witness signature (ID must not change)",
+      "attestation_id": "comms.attest:z6m45gbbV6nNxkZfZXU2oa9bckJSFiqL4RhCaVNBkG3QH",
+      "signatures_added": [
+        {
+          "by": "comms.steward:z9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
+          "role": "witness",
+          "signed_at": "2026-06-11T00:00:02Z",
+          "sig_payload_cbor_hex": "a661746b636f6d6d732e7369672f31626279783b636f6d6d732e737465776172643a7a39685352365337575074786d546f6a676f364747336b347944506563674a593239326a37787273554757427563616c67676564323535313964636f726558205593793fda0c0ab6cec34722ced9dc0923e1bcaea5f06728ed6239220d85aa1664726f6c65677769746e657373697369676e65645f617474323032362d30362d31315430303a30303a30325a",
+          "signature_hex": "6997257bcf76ed31a8c521d684eccc7db0ddda48680c344702e0adff065bb0e39a7a98c41d3cf54ea219fa069afb0a62bff7be1f29b36b0c3ee0cf588ca85707"
+        }
+      ]
+    },
+    {
+      "name": "endorsement referencing vector 1",
+      "core": {
+        "v": 1,
+        "t": "comms.attestation/1",
+        "c": {
+          "t": "endorsement/1",
+          "target": "comms.attest:z6m45gbbV6nNxkZfZXU2oa9bckJSFiqL4RhCaVNBkG3QH",
+          "in_capacity": "field-records",
+          "weight": "primary"
+        },
+        "f": {
+          "issued_at": "2026-06-11T01:00:00Z",
+          "language": "en"
+        },
+        "r": [
+          {
+            "role": "responds-to",
+            "id": "comms.attest:z6m45gbbV6nNxkZfZXU2oa9bckJSFiqL4RhCaVNBkG3QH"
+          }
+        ]
+      },
+      "canonical_core_cbor_hex": "a56163a461746d656e646f7273656d656e742f3166746172676574783a636f6d6d732e6174746573743a7a366d343567626256366e4e786b5a665a5855326f613962636b4a534669714c3452684361564e426b4733514866776569676874677072696d6172796b696e5f63617061636974796d6669656c642d7265636f7264736166a2686c616e677561676562656e696973737565645f617474323032362d30362d31315430313a30303a30305a617281a2626964783a636f6d6d732e6174746573743a7a366d343567626256366e4e786b5a665a5855326f613962636b4a534669714c3452684361564e426b4733514864726f6c656b726573706f6e64732d746f617473636f6d6d732e6174746573746174696f6e2f31617601",
+      "core_hash_hex": "f2e9e462abd1dc0649e14055249cf54b29dd632b2890c211137ff43a8c063980",
+      "attestation_id": "comms.attest:zHMEX4Nfb2kHcCBW59gbwmYrhdfY4UbsE9TcLZX2Uppb9",
+      "signatures": [
+        {
+          "by": "comms.steward:z9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
+          "role": "author",
+          "signed_at": "2026-06-11T01:00:01Z",
+          "sig_payload_cbor_hex": "a661746b636f6d6d732e7369672f31626279783b636f6d6d732e737465776172643a7a39685352365337575074786d546f6a676f364747336b347944506563674a593239326a37787273554757427563616c67676564323535313964636f72655820f2e9e462abd1dc0649e14055249cf54b29dd632b2890c211137ff43a8c06398064726f6c6566617574686f72697369676e65645f617474323032362d30362d31315430313a30303a30315a",
+          "signature_hex": "ca737c31b4d014c91e44a55fb31e47e03250bff725c6ee939112b5480c3f436631923c6e0936fdb6c83721dedd67f0a31a32beeff41fbc8c01e4523b67c56f0c"
+        }
+      ]
+    }
+  ],
+  "negative_vectors": [
+    {
+      "name": "role swap must fail",
+      "description": "Take vector 1's signature and present it with role='sponsor'. Verification MUST fail because role is inside the signed payload."
+    },
+    {
+      "name": "cross-context replay must fail",
+      "description": "A blake3 hash of the core computed WITHOUT the domain separation prefix must not verify as a core hash."
+    }
+  ]
+}

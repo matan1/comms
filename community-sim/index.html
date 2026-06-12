@@ -3,278 +3,118 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Comms Community Simulator</title>
+    <title>Comms Village — Spatial Community Simulator</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <main class="app-shell">
-      <section class="topbar" aria-label="Simulation controls">
-        <div>
-          <p class="eyebrow">Comms Attest 1.0</p>
-          <h1>Community Simulator</h1>
+      <header class="topbar" aria-label="Simulation controls">
+        <div class="masthead">
+          <p class="eyebrow">Comms Attest 1.0 &middot; prototype 2</p>
+          <h1>Village Survey</h1>
         </div>
         <div class="run-controls">
-          <button id="stepBtn" class="primary" type="button" title="Advance one cycle">
-            <span aria-hidden="true">&gt;</span>
-            <span>Step</span>
-          </button>
-          <button id="runBtn" type="button" title="Run or pause the simulation">
-            <span aria-hidden="true">[]</span>
-            <span>Run</span>
-          </button>
-          <button id="resetBtn" type="button" title="Reset simulation">
-            <span aria-hidden="true">R</span>
-            <span>Reset</span>
-          </button>
+          <span id="clock" class="clock">Day 1 · Morning</span>
+          <button id="runBtn" class="primary" type="button" title="Run or pause the day">Run</button>
+          <button id="stepBtn" type="button" title="Advance one full day">Step day</button>
+          <button id="resetBtn" type="button" title="Rebuild the village from the controls">Reset</button>
           <label class="speed-control">
-            Run speed
-            <input id="runSpeed" type="range" min="1" max="10" value="5" step="1">
-            <output id="runSpeedOut"></output>
+            Pace
+            <input id="speed" type="range" min="1" max="10" value="5" step="1">
           </label>
+          <span id="viewpointPill" class="viewpoint-pill" title="Whose beliefs color the map">Omniscient view</span>
         </div>
-      </section>
+      </header>
 
-      <section class="workspace">
+      <div class="workspace">
         <aside class="controls" aria-label="Scenario parameters">
           <div class="control-group">
-            <h2>Community</h2>
-            <label>
-              Initial stewards
-              <input id="population" type="range" min="8" max="44" value="22" step="1">
+            <h2>Village <span class="hint">applies on reset</span></h2>
+            <label>Villagers
+              <input id="population" type="range" min="10" max="34" value="18" step="1">
               <output id="populationOut"></output>
             </label>
-            <label>
-              Initial deal prior
-              <input id="trust" type="range" min="20" max="90" value="58" step="1">
+            <label>Farmstead share
+              <input id="farmShare" type="range" min="0" max="45" value="25" step="5">
+              <output id="farmShareOut"></output>
+            </label>
+            <label>Trust prior
+              <input id="trust" type="range" min="20" max="90" value="55" step="1">
               <output id="trustOut"></output>
             </label>
-            <label>
-              Attestation frequency
-              <input id="attestFreq" type="range" min="1" max="10" value="5" step="1">
-              <output id="attestFreqOut"></output>
+          </div>
+
+          <div class="control-group">
+            <h2>Word of mouth</h2>
+            <label>Gossip reach
+              <input id="gossipRadius" type="range" min="4" max="26" value="12" step="1">
+              <output id="gossipRadiusOut"></output>
             </label>
-            <label>
-              Objection pressure
-              <input id="objectionRate" type="range" min="0" max="35" value="9" step="1">
-              <output id="objectionRateOut"></output>
+            <label>Gossip depth
+              <input id="gossipDepth" type="range" min="2" max="14" value="4" step="1">
+              <output id="gossipDepthOut"></output>
+            </label>
+            <label>Farmstead market trips
+              <input id="marketAttend" type="range" min="10" max="90" value="25" step="5">
+              <output id="marketAttendOut"></output>
             </label>
           </div>
 
           <div class="control-group">
-            <h2>Ceremonies</h2>
-            <label>
-              Minimum sponsors
-              <input id="sponsors" type="range" min="1" max="6" value="2" step="1">
+            <h2>Ceremony rule</h2>
+            <label>Sponsors required
+              <input id="sponsors" type="range" min="1" max="5" value="2" step="1">
               <output id="sponsorsOut"></output>
             </label>
-            <label>
-              Witness quorum
-              <input id="witnessQuorum" type="range" min="1" max="10" value="4" step="1">
+            <label>Witness quorum
+              <input id="witnessQuorum" type="range" min="2" max="12" value="5" step="1">
               <output id="witnessQuorumOut"></output>
             </label>
-            <label>
-              Commit rule
-              <select id="commitRule">
-                <option value="sponsor-quorum">Sponsor quorum</option>
-                <option value="majority">Majority consent</option>
-                <option value="unanimous-witnesses">Unanimous witnesses</option>
-              </select>
+            <label>Objection sensitivity
+              <input id="objectionRate" type="range" min="0" max="100" value="40" step="5">
+              <output id="objectionRateOut"></output>
             </label>
+            <label>Newcomer arrivals
+              <input id="arrivalRate" type="range" min="0" max="100" value="35" step="5">
+              <output id="arrivalRateOut"></output>
+            </label>
+            <button id="injectBtn" type="button" title="A well-presented newcomer who will break pledges once admitted">Inject defector</button>
           </div>
 
-          <div class="control-group">
-            <h2>Economy</h2>
-            <label>
-              Resource pool
-              <input id="pool" type="range" min="80" max="600" value="220" step="10">
-              <output id="poolOut"></output>
-            </label>
-            <label>
-              Seed floor
-              <input id="seedFloor" type="range" min="5" max="45" value="20" step="1">
-              <output id="seedFloorOut"></output>
-            </label>
-            <label>
-              Per-steward cap
-              <input id="cap" type="range" min="15" max="60" value="36" step="1">
-              <output id="capOut"></output>
-            </label>
-            <label>
-              Return culture
-              <input id="returnRate" type="range" min="0" max="35" value="12" step="1">
-              <output id="returnRateOut"></output>
-            </label>
-            <label>
-              Exchange rates
-              <select id="priceMode">
-                <option value="floating">Floating, attested</option>
-                <option value="fixed">Fixed rule table</option>
-              </select>
-            </label>
-            <label>
-              Price attestations
-              <input id="priceSignal" type="range" min="0" max="100" value="55" step="5">
-              <output id="priceSignalOut"></output>
-            </label>
-            <label>
-              Production variance
-              <input id="productionVariance" type="range" min="0" max="60" value="24" step="2">
-              <output id="productionVarianceOut"></output>
-            </label>
-          </div>
-
-          <div class="control-group tuner">
-            <h2>Auto-Tune</h2>
-            <label>
-              Target
-              <select id="tuneTarget" disabled title="Fixed to Healthy Balance in this version">
-                <option value="healthy-balance">Healthy Balance</option>
-              </select>
-            </label>
-            <label>
-              Search budget
-              <select id="tuneBudget">
-                <option value="quick">Quick</option>
-                <option value="normal" selected>Normal</option>
-                <option value="deep">Deep</option>
-              </select>
-            </label>
-            <button id="tuneBtn" type="button" class="primary tune-run" title="Search for balanced parameters">
-              <span aria-hidden="true">~</span>
-              <span>Run tune</span>
-            </button>
-            <p id="tuneStatus" class="tune-status">Idle. Searches parameters against the current population and run speed; previews results before changing live controls.</p>
-            <ol id="tuneResults" class="tune-results"></ol>
+          <div class="control-group legend-group">
+            <h2>Reading the map</h2>
+            <ul class="legend">
+              <li><i class="dot trust-high"></i>trusted, as seen from the current viewpoint</li>
+              <li><i class="dot trust-low"></i>distrusted, from the same viewpoint</li>
+              <li><i class="dot candidate"></i>newcomer awaiting ceremony</li>
+              <li><i class="dot stranger"></i>stranger — viewpoint holds no record of them</li>
+              <li><i class="ring defector"></i>defector (omniscient view only)</li>
+              <li><i class="swatch ripple"></i>word of mouth passing between two villagers</li>
+            </ul>
+            <p class="legend-note">Click a villager to see the village as they believe it. Attestations are born where they happen and travel only by presence and gossip.</p>
           </div>
         </aside>
 
-        <section class="stage" aria-label="Simulation output">
-          <div class="metrics">
-            <article>
-              <span>Cycle</span>
-              <strong id="cycleMetric">0</strong>
-            </article>
-            <article>
-              <span>Active stewards</span>
-              <strong id="membersMetric">0</strong>
-            </article>
-            <article>
-              <span>Mean deal trust</span>
-              <strong id="trustMetric">0%</strong>
-            </article>
-            <article>
-              <span>Recorded attestations</span>
-              <strong id="attestMetric">0</strong>
-            </article>
-            <article>
-              <span>Gini</span>
-              <strong id="giniMetric">0.00</strong>
-            </article>
-          </div>
-
-          <div class="main-grid">
-            <section class="panel network-panel">
-              <div class="panel-head">
-                <h2>Trust Fabric</h2>
-                <div class="legend">
-                  <span><i class="member"></i>member</span>
-                  <span><i class="candidate"></i>candidate</span>
-                  <span><i class="sponsor"></i>sponsored</span>
-                  <span><i class="edge endorse"></i>endorsement</span>
-                  <span><i class="edge object"></i>objection</span>
-                  <span><i class="edge recognize"></i>recognition</span>
-                </div>
-              </div>
-              <canvas id="networkCanvas" width="920" height="560"></canvas>
-              <div id="stewardInspector" class="inspector" hidden></div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <h2>Audit Graph</h2>
-                <span id="commitStatus" class="status-pill">ready</span>
-              </div>
-              <canvas id="auditCanvas" width="520" height="220"></canvas>
-              <dl class="attestation-key">
-                <div><dt>ceremony</dt><dd>records an admission attempt</dd></div>
-                <div><dt>endorsement</dt><dd>sponsors or peers vouch for someone</dd></div>
-                <div><dt>objection</dt><dd>a witness disputes a ceremony or claim</dd></div>
-                <div><dt>market</dt><dd>quotes, purchases, and clearing decisions</dd></div>
-              </dl>
-              <div class="mini-stats">
-                <div><span>ceremony records</span><strong id="ceremonyCount">0</strong></div>
-                <div><span>endorsements</span><strong id="endorsementCount">0</strong></div>
-                <div><span>objections</span><strong id="objectionCount">0</strong></div>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-head">
-                <h2>Resource Allocation</h2>
-                <span id="poolLabel"></span>
-              </div>
-              <div class="allocation-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Steward</th>
-                      <th>Need</th>
-                      <th>Deal trust</th>
-                      <th>Grant</th>
-                    </tr>
-                  </thead>
-                  <tbody id="allocationTable"></tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="panel market-panel">
-              <div class="panel-head">
-                <h2>Goods Market</h2>
-                <span id="marketLabel" class="status-pill">floating</span>
-              </div>
-              <div class="market-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Good</th>
-                      <th>Supply</th>
-                      <th>Demand</th>
-                      <th>Price</th>
-                      <th>Cleared</th>
-                    </tr>
-                  </thead>
-                  <tbody id="marketTable"></tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="panel ledger-panel">
-              <div class="panel-head">
-                <h2>Steward Ledger</h2>
-                <span class="status-pill">this cycle</span>
-              </div>
-              <div class="ledger-wrap">
-                <table>
-                  <thead id="ledgerHead"></thead>
-                  <tbody id="ledgerTable"></tbody>
-                </table>
-              </div>
-            </section>
-
-            <section class="panel timeline-panel">
-              <div class="panel-head">
-                <h2>Event Log</h2>
-                <button id="exportBtn" type="button" title="Export current attestation summary">
-                  <span aria-hidden="true">v</span>
-                  <span>Export</span>
-                </button>
-              </div>
-              <ol id="eventLog" class="event-log"></ol>
-            </section>
-          </div>
+        <section class="stage" aria-label="Village map">
+          <canvas id="worldCanvas"></canvas>
+          <div id="inspector" class="inspector" hidden></div>
         </section>
-      </section>
+
+        <aside class="readout" aria-label="Survey readout">
+          <div class="metrics">
+            <article><span>Members</span><strong id="membersMetric">0</strong></article>
+            <article><span>Attestations</span><strong id="attestMetric">0</strong></article>
+            <article><span>Fresh-news coverage</span><strong id="coverageMetric">0%</strong></article>
+            <article><span>Belief spread</span><strong id="spreadMetric">0.00</strong></article>
+          </div>
+          <section class="panel log-panel">
+            <div class="panel-head">
+              <h2>Field log</h2>
+            </div>
+            <ol id="eventLog" class="event-log"></ol>
+          </section>
+        </aside>
+      </div>
     </main>
 
     <script src="./app.js"></script>

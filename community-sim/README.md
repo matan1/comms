@@ -1,51 +1,72 @@
-# Comms Community Simulator
+# Comms Village — spatial community simulator (prototype 2)
 
-Static browser demo for exploring community deal trust, ceremony commitment rules,
-attestation frequency, sponsor requirements, objections, and a seed-floor
-resource economy with a small goods market.
-
-Open `index.html` in a browser, or serve the directory with:
+A reimagining of `community-sim/` around **literal space and partial
+knowledge**. Static browser demo: no build, no dependencies, deterministic
+under a seeded PRNG. Open `index.html` directly or serve:
 
 ```sh
-python3 -m http.server 8080 -d community-sim
+python3 -m http.server 8080
 ```
 
-The app is intentionally separate from the Python tool suite. It models the
-same concepts from `docs/comms.spec.1.0.md` at simulation level: ceremony
-records, endorsements, objections, recognitions, allocation returns, and an
-auditable event graph.
+## What it models
 
-The goods market treats allocation grants as purchasing credits. Stewards
-produce one abstract good, consume a basket of goods, and buy what they need
-from the current supply. Exchange rates can be fixed by rule or floating. In
-floating mode, prices move from supply/demand pressure plus trusted
-`price-signal/1` attestations emitted by market participants. Cycles also emit
-sampled `purchase-decision/1` records and a `market-clearing/1` decision so the
-price path remains auditable.
+The previous simulator gave every steward a global trust scalar and an
+omniscient ledger. This one takes the protocol at its word instead:
 
-Deal trust is derived from behavior: completed agreements raise it and failed
-negotiations lower it. The initial prior slider only seeds new stewards before
-their trade and ceremony history takes over.
+- **Every trust input is an attestation** — deal records, endorsements,
+  objections, ceremony records. There is no global trust value anywhere.
+- **Attestations are born at a place** and are initially known only to whoever
+  was present (buyer, seller, a couple of bystanders; ceremony attendees).
+- **Knowledge travels by presence and gossip.** Each villager keeps their own
+  store (`knowledge` set + `feed` in learn order); co-present villagers and
+  evening neighbors exchange a few recent items at a time.
+- **Trust is viewer-relative**: a villager's opinion of another is a pure
+  function of the attestations they hold, plus the community prior. Click any
+  villager and the whole map recolors to *their* beliefs; villagers they hold
+  no record of render gray as strangers.
+- **Ceremonies count sponsors and objectors by each attendee's own beliefs**,
+  and the ceremony record is known only to those who came. A defector can be
+  admitted by people the bad news hasn't reached.
 
-## Auto-Tune
+## The day
 
-The Auto-Tune panel searches for balanced simulator parameters without any
-models, training, or network services. It runs candidate parameter sets
-off-screen — the visible simulation is never mutated until you apply a result —
-and ranks them against a "Healthy Balance" target: high mean deal trust, good
-market satisfaction, low unmet demand, moderate inequality, and continued
-ceremony/admission activity.
+Four phases, walked on the map: morning work at home → midday market (bilateral
+witnessed trades) → afternoon commons (petitions and admission ceremonies) →
+evening hearth gossip between neighboring homes.
 
-Pick a search budget (Quick / Normal / Deep) and press **Run tune**. The tuner
-uses a deterministic randomized/grid hybrid: it always includes the current
-settings plus balanced anchors across the commit-rule and exchange-rate options,
-then fills the remaining budget with randomized samples over conservative ranges.
-Each candidate runs for a fixed horizon and is scored on the average of its
-recent cycles. Population and run speed are held fixed so candidates stay
-comparable to the current scenario.
+The **farmstead** cluster up the north-east road only makes the market trip
+some days. It is the in-community stand-in for sneakernet latency: news reaches
+it late, and its beliefs visibly lag the village square.
 
-Ranked candidates show the score, deal trust, satisfaction, unmet demand, Gini,
-steward count, and an admission summary, with a short explanation of each
-candidate's strongest and weakest dimension and which controls it changes. Press
-**Apply** on a candidate to copy its settings into the live controls and reset
-the simulation.
+## Things to try
+
+- **Inject defector**, let them get admitted, then watch the village's view of
+  them collapse over the following days while the farmstead still trusts them.
+  Click a farmsteader: the inspector calls out where they disagree with the
+  village mean ("hasn't heard the bad news").
+- Drop **Farmstead market trips** and **Gossip depth** to widen the lag;
+  raise them to watch the community synchronize.
+- Tighten **Sponsors required** / **Witness quorum** and watch admission slow.
+- Watch **Fresh-news coverage** (how much of the last 3 days' attestations the
+  average member holds) and **Belief spread** (how much members disagree about
+  each other) move when a scandal lands.
+
+## Headless harness
+
+Same convention as v1: logic and rendering are split. `seedState(p)`,
+`advanceDay(p)`, `nextPhase(p)`, and `normalizeParams(raw)` run without a DOM
+(`hasDom` guards all DOM access), so a Node harness can concatenate `app.js`
+with test code and drive whole scenarios. This was used to validate
+determinism, admission pacing, gossip throughput, and the defector divergence
+arc during development.
+
+## Deliberate simplifications (and where this goes)
+
+- One community; the farmstead is distance, not a separate steward. The next
+  tier adds neighboring settlements, couriers carrying **bundles**, schisms,
+  and succession scenarios from Steward 1.0.
+- Beliefs use flat tallies; no endorser-weighted transitivity (Vouch territory).
+- The economy is a thin pretext for generating witnessed commitments; v1's
+  allocation/market depth was intentionally left behind here.
+- Attestations are sim-level records, not spec-encoded envelopes — same
+  illustrative (not normative) stance as v1.

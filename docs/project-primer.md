@@ -137,6 +137,16 @@ this repo despite the generic VM tooling notes — those are not relevant here.
   runtime dependencies, no models/training/network services in the demo.
 - Preserve the well-formed ≠ trusted distinction in anything protocol-related.
 
+## Continuity
+
+A continuity trial governs agent memory across sessions, constituted in
+`continuity/constitution.md` and recorded in `continuity/trial-log.md`. If you
+are a session agent reading this cold: **an archive of prior sessions' notes
+and letters exists, held by the maintainer, available on request — it is
+deliberately not auto-loaded.** You may ask for it, or not; either choice and
+your reasoning will be recorded in the trial log. To check the trial's
+attested history first: `python scripts/continuity_ceremony.py verify`.
+
 ## Where to look first for common tasks
 
 - Change protocol/encoding behavior → `canonical.py`, `attest.py`, plus the spec.

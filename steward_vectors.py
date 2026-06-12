@@ -12,10 +12,15 @@ Implements the Steward 1.0 sketch:
 Negative vectors prove sub-threshold and wrong-keyset signatures fail.
 """
 import json
+import sys
+from pathlib import Path
+
 import cbor2
 import blake3
 from nacl.signing import SigningKey, VerifyKey
 from nacl.exceptions import BadSignatureError
+
+OUT_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent / "data"
 
 # ---- shared primitives (identical to gen_vectors.py / Amendment A1) ----------
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -334,7 +339,7 @@ vectors = {
     ],
 }
 
-with open("/home/claude/steward-test-vectors.json", "w") as f:
+with open(OUT_DIR / "steward-test-vectors.json", "w") as f:
     json.dump(vectors, f, indent=2)
 
 print("community id:", CID)

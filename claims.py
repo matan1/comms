@@ -14,6 +14,30 @@ Agent-oriented types fall into three groups:
 from __future__ import annotations
 
 
+# ---- the general-purpose primitive ----
+
+def general_claim(*, about: str, kind: str, body: bytes | str,
+                  media_type: str = "text/plain;charset=utf-8",
+                  support: list[str] | None = None) -> dict:
+    """A statement about something: observation, testimony, synthesis, etc.
+
+    kind: "observation" | "synthesis" | "prediction" | "testimony" |
+          "translation" | "other"
+
+    Per A1.6 the body is always carried as bytes on the wire regardless of
+    media type, so one logical content has exactly one canonical encoding.
+    """
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    return {
+        "t": "general-claim/1",
+        "about": about,
+        "kind": kind,
+        "content": {"media_type": media_type, "body": body},
+        "support": support or [],
+    }
+
+
 # ---- provenance & capability (the ceremony) ----
 
 def agent_provenance(*, agent: str, kind: str, model_id: str,

@@ -9,9 +9,14 @@ Implements:
     {"t": "comms.sig/1", "core": <core hash bytes>, "by", "alg", "role", "signed_at"}
 """
 import json
+import sys
+from pathlib import Path
+
 import cbor2
 import blake3
 from nacl.signing import SigningKey
+
+OUT_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "data"
 
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -161,7 +166,7 @@ vectors = {
     ],
 }
 
-with open("/home/claude/attest-1.0-test-vectors.json", "w") as f:
+with open(OUT_DIR / "attest-1.0-test-vectors.json", "w") as f:
     json.dump(vectors, f, indent=2)
 
 print("attestation 1 id:", attest1_id)

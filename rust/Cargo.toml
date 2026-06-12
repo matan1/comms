@@ -1,0 +1,22 @@
+[package]
+name = "comms-core"
+version = "0.1.0"
+edition = "2021"
+description = "Reference core for Comms Attest 1.0 (+A1) and Steward 1.0: protocol substrate only, no notion of trust"
+
+[lib]
+name = "comms_core"
+path = "lib.rs"
+
+[dependencies]
+ed25519-dalek = "2"
+blake3 = "1"
+bs58 = "0.5"
+
+[dev-dependencies]
+hex = "0.4"
+serde_json = "1"
+
+[[test]]
+name = "golden"
+path = "golden.rs"

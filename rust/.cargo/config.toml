@@ -1,0 +1,3 @@
+# `cargo xtask <op>` runs the task runner in xtask/. Run from this rust/ dir.
+[alias]
+xtask = "run -q --package xtask --"

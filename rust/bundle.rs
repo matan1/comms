@@ -9,8 +9,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{attestation_id, cbor, dsh, personal_verify, Value, CTX_BUNDLE};
-use crate::steward::{Attestation, SignatureObject};
+use ed25519_dalek::SigningKey;
+
+use crate::{
+    attestation_id, cbor, dsh, personal_sign, personal_steward_id, personal_verify, Value,
+    CTX_BUNDLE,
+};
+use crate::steward::{verify_community_attestation, Attestation, SignatureObject};
 
 pub const BUNDLE_TYPE: &str = "comms.bundle/1";
 pub const SEAL_TAG: &str = "comms.bundle.seal/1";
@@ -41,6 +46,54 @@ impl std::error::Error for BundleError {}
 pub struct Bundle {
     pub attestations: Vec<Attestation>,
     pub media: HashMap<String, Vec<u8>>,
+    /// Optional informational bundle manifest `{created_at, description,
+    /// created_by?}`. Distinct from the A1.8 *seal* manifest (which enumerates
+    /// member ids); this one is metadata only and is not covered by the seal.
+    pub manifest: Option<Value>,
+}
+
+impl Bundle {
+    /// Canonical CBOR of the bundle container. Mirrors
+    /// `comms/bundle.py:Bundle.to_cbor`: `{v, t, attestations}` plus `media` and
+    /// `manifest` only when non-empty / present.
+    pub fn to_cbor(&self) -> Vec<u8> {
+        let mut entries = vec![
+            (Value::text("v"), Value::U64(1)),
+            (Value::text("t"), Value::text(BUNDLE_TYPE)),
+            (
+                Value::text("attestations"),
+                Value::Array(self.attestations.iter().map(Attestation::to_envelope_value).collect()),
+            ),
+        ];
+        if !self.media.is_empty() {
+            let media = self
+                .media
+                .iter()
+                .map(|(k, v)| (Value::text(k), Value::Bytes(v.clone())))
+                .collect();
+            entries.push((Value::text("media"), Value::Map(media)));
+        }
+        if let Some(manifest) = &self.manifest {
+            entries.push((Value::text("manifest"), manifest.clone()));
+        }
+        cbor::encode(&Value::Map(entries))
+    }
+
+    /// The non-seal members of this bundle (clones), in bundle order.
+    pub fn members(&self) -> Vec<Attestation> {
+        let seal_ids: HashSet<String> =
+            find_seals(self).iter().map(|(a, _)| attestation_id(&a.core)).collect();
+        self.attestations
+            .iter()
+            .filter(|a| !seal_ids.contains(&a.id()))
+            .cloned()
+            .collect()
+    }
+
+    /// Whether the bundle already carries at least one A1.8 seal.
+    pub fn is_sealed(&self) -> bool {
+        !find_seals(self).is_empty()
+    }
 }
 
 /// Content-addressed key for a media blob: raw (not domain-separated) blake3,
@@ -114,6 +167,13 @@ fn attestation_from_value(v: &Value) -> Result<Attestation, BundleError> {
     Ok(Attestation { core, signatures })
 }
 
+/// Parse a single attestation from its canonical CBOR envelope bytes — for
+/// reading loose `<id>.cbor` attestation files into a bundle.
+pub fn parse_attestation(data: &[u8]) -> Result<Attestation, BundleError> {
+    let v = cbor::decode(data).map_err(BundleError::Cbor)?;
+    attestation_from_value(&v)
+}
+
 /// Parse a bundle from its canonical CBOR wire bytes.
 pub fn parse_bundle(data: &[u8]) -> Result<Bundle, BundleError> {
     let v = cbor::decode(data).map_err(BundleError::Cbor)?;
@@ -146,7 +206,9 @@ pub fn parse_bundle(data: &[u8]) -> Result<Bundle, BundleError> {
         HashMap::new()
     };
 
-    Ok(Bundle { attestations, media })
+    let manifest = v.get("manifest").cloned();
+
+    Ok(Bundle { attestations, media, manifest })
 }
 
 /// Identify A1.8 seal attestations. A seal is a `general-claim/1` with
@@ -282,4 +344,281 @@ pub fn verify_seal(bundle: &Bundle) -> SealReport {
 
     report.ok = report.signature_ok && report.hash_ok && report.members_match;
     report
+}
+
+// ---- inspection (the receiver side) ----------------------------------------
+
+/// One signature's verification result on a member attestation.
+#[derive(Debug)]
+pub struct SigReport {
+    pub by: String,
+    pub role: String,
+    pub alg: String,
+    pub ok: bool,
+    /// Human-readable note: "ok", or why it failed / could not be resolved.
+    pub detail: String,
+}
+
+/// One reference and whether its target is present in this bundle.
+#[derive(Debug)]
+pub struct RefReport {
+    pub role: String,
+    pub id: String,
+    pub resolves_in_bundle: bool,
+}
+
+/// Per-member verification result.
+#[derive(Debug)]
+pub struct MemberReport {
+    pub id: String,
+    pub claim_type: String,
+    pub is_seal: bool,
+    pub signatures: Vec<SigReport>,
+    /// True iff the member carries at least one signature and all verify.
+    pub all_signatures_ok: bool,
+    pub refs: Vec<RefReport>,
+}
+
+/// Whole-bundle inspection: every member verified on its own terms, media
+/// content-key checks, and the A1.8 seal report.
+#[derive(Debug)]
+pub struct InspectReport {
+    pub members: Vec<MemberReport>,
+    /// (media key, whether the blob's content hash matches its key).
+    pub media: Vec<(String, bool)>,
+    pub seal: SealReport,
+}
+
+/// Verify every member of a bundle on its own terms — the receiver-side check
+/// `verify_seal` does not do. Personal (`ed25519`) signatures are checked with
+/// `personal_verify`; community (`ed25519-set/1`) signatures are resolved
+/// through the keyset chain *within this bundle* and threshold-checked. Refs are
+/// marked resolvable iff their target attestation is present here. A `true`
+/// remains layer-2/3 (verified + resolvable), never a trust judgment.
+pub fn inspect_bundle(bundle: &Bundle) -> InspectReport {
+    let seal_ids: HashSet<String> =
+        find_seals(bundle).iter().map(|(a, _)| attestation_id(&a.core)).collect();
+    let present_ids: HashSet<String> =
+        bundle.attestations.iter().map(|a| attestation_id(&a.core)).collect();
+
+    // A store over the bundle's own members lets community signatures resolve
+    // their keyset chains offline, the sneakernet norm (A1.4).
+    let store: HashMap<String, Attestation> = bundle
+        .attestations
+        .iter()
+        .map(|a| (a.id(), a.clone()))
+        .collect();
+
+    let mut members = Vec::new();
+    for att in &bundle.attestations {
+        let id = att.id();
+        let claim_type = att
+            .core
+            .get("c")
+            .and_then(|c| c.get("t"))
+            .and_then(Value::as_text)
+            .unwrap_or("?")
+            .to_owned();
+
+        let mut signatures = Vec::new();
+        for sig in &att.signatures {
+            let (ok, detail) = verify_member_signature(att, sig, &store);
+            signatures.push(SigReport {
+                by: sig.by.clone(),
+                role: sig.role.clone(),
+                alg: sig.alg.clone(),
+                ok,
+                detail,
+            });
+        }
+        let all_signatures_ok = !signatures.is_empty() && signatures.iter().all(|s| s.ok);
+
+        let refs = att
+            .core
+            .get("r")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        let rid = r.get("id").and_then(Value::as_text)?.to_owned();
+                        let role = r
+                            .get("role")
+                            .and_then(Value::as_text)
+                            .unwrap_or("?")
+                            .to_owned();
+                        Some(RefReport {
+                            resolves_in_bundle: present_ids.contains(&rid),
+                            role,
+                            id: rid,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        members.push(MemberReport {
+            is_seal: seal_ids.contains(&id),
+            id,
+            claim_type,
+            signatures,
+            all_signatures_ok,
+            refs,
+        });
+    }
+
+    let media = bundle
+        .media
+        .iter()
+        .map(|(k, blob)| (k.clone(), media_key(blob) == *k))
+        .collect();
+
+    InspectReport { members, media, seal: verify_seal(bundle) }
+}
+
+/// Verify a single signature object against its attestation, returning
+/// (ok, human-readable detail).
+fn verify_member_signature(
+    att: &Attestation,
+    sig: &SignatureObject,
+    store: &HashMap<String, Attestation>,
+) -> (bool, String) {
+    match sig.alg.as_str() {
+        "ed25519" => {
+            let Some(pk) = pubkey_from_steward_id(&sig.by) else {
+                return (false, "personal: malformed steward id".to_owned());
+            };
+            let Ok(raw) = <[u8; 64]>::try_from(sig.signature.as_slice()) else {
+                return (false, "personal: signature not 64 bytes".to_owned());
+            };
+            if personal_verify(&att.core, &sig.by, &sig.role, &sig.signed_at, &pk, &raw) {
+                (true, "ed25519 ok".to_owned())
+            } else {
+                (false, "ed25519 invalid".to_owned())
+            }
+        }
+        "ed25519-set/1" => match verify_community_attestation(att, &sig.by, store) {
+            Ok(()) => (true, "ed25519-set/1 ok (threshold met)".to_owned()),
+            Err(e) => (false, format!("ed25519-set/1: {e}")),
+        },
+        other => (false, format!("unknown alg {other}")),
+    }
+}
+
+// ---- creation (the courier side) -------------------------------------------
+
+/// Build the A1.8 seal manifest `{created_at, created_by, description,
+/// attestation_ids}` over `member_ids` (sorted). Port of
+/// `comms/bundle.py:_seal_manifest`.
+fn seal_manifest(member_ids: &[String], created_by: &str, description: &str, created_at: &str) -> Value {
+    let mut ids: Vec<&String> = member_ids.iter().collect();
+    ids.sort();
+    Value::Map(vec![
+        (Value::text("created_at"), Value::text(created_at)),
+        (Value::text("created_by"), Value::text(created_by)),
+        (Value::text("description"), Value::text(description)),
+        (
+            Value::text("attestation_ids"),
+            Value::Array(ids.into_iter().map(|s| Value::text(s)).collect()),
+        ),
+    ])
+}
+
+/// Build the A1.8 integrity seal over `members`, signed by `sk`. Faithful port
+/// of `comms/bundle.py:seal`: a `general-claim/1` whose CBOR body carries the
+/// member-id manifest and `bundle_hash = H(CTX_BUNDLE, canon(manifest))`, signed
+/// as the author. Timestamps are explicit so the bytes are reproducible (Python
+/// stamps `now()` by default; byte-parity requires pinning them).
+pub fn build_seal(
+    members: &[Attestation],
+    sk: &SigningKey,
+    description: &str,
+    created_at: &str,
+    issued_at: &str,
+    signed_at: &str,
+) -> Attestation {
+    let by = personal_steward_id(sk.verifying_key().as_bytes());
+    let member_ids: Vec<String> = members.iter().map(Attestation::id).collect();
+    let manifest = seal_manifest(&member_ids, &by, description, created_at);
+    let bundle_hash = dsh(CTX_BUNDLE, &cbor::encode(&manifest));
+    let body = cbor::encode(&Value::Map(vec![
+        (Value::text("t"), Value::text(SEAL_TAG)),
+        (Value::text("manifest"), manifest),
+        (Value::text("bundle_hash"), Value::Bytes(bundle_hash.to_vec())),
+    ]));
+
+    // general-claim/1 core wrapping the CBOR seal body (claims.general_claim).
+    let claim = Value::Map(vec![
+        (Value::text("t"), Value::text("general-claim/1")),
+        (Value::text("about"), Value::text("comms.bundle")),
+        (Value::text("kind"), Value::text("synthesis")),
+        (
+            Value::text("content"),
+            Value::Map(vec![
+                (Value::text("media_type"), Value::text("application/cbor")),
+                (Value::text("body"), Value::Bytes(body)),
+            ]),
+        ),
+        (Value::text("support"), Value::Array(Vec::new())),
+    ]);
+    // frame: Attestation.build defaults language to "zxx"; seal adds the occasion.
+    let frame = Value::Map(vec![
+        (Value::text("issued_at"), Value::text(issued_at)),
+        (Value::text("language"), Value::text("zxx")),
+        (Value::text("occasion"), Value::text("bundle seal (A1.8)")),
+    ]);
+    let core = Value::Map(vec![
+        (Value::text("v"), Value::U64(1)),
+        (Value::text("t"), Value::text("comms.attestation/1")),
+        (Value::text("c"), claim),
+        (Value::text("f"), frame),
+        (Value::text("r"), Value::Array(Vec::new())),
+    ]);
+
+    let signature = personal_sign(&core, sk, "author", signed_at).to_vec();
+    Attestation {
+        core,
+        signatures: vec![SignatureObject {
+            by,
+            alg: "ed25519".to_owned(),
+            role: "author".to_owned(),
+            signed_at: signed_at.to_owned(),
+            keyset: None,
+            signature,
+        }],
+    }
+}
+
+/// Assemble a bundle from `members` (+ optional `media`), optionally sealing it
+/// with `sealer`. Port of `comms/bundle.py:make`: when a sealer is given an
+/// A1.8 seal is appended, and an informational bundle manifest is attached when
+/// there is a description or a known creator.
+pub fn make_bundle(
+    members: Vec<Attestation>,
+    media: HashMap<String, Vec<u8>>,
+    sealer: Option<&SigningKey>,
+    description: &str,
+    created_at: &str,
+    issued_at: &str,
+    signed_at: &str,
+) -> Bundle {
+    let mut attestations = members.clone();
+    if let Some(sk) = sealer {
+        attestations.push(build_seal(&members, sk, description, created_at, issued_at, signed_at));
+    }
+
+    let created_by = sealer.map(|sk| personal_steward_id(sk.verifying_key().as_bytes()));
+    let manifest = if !description.is_empty() || created_by.is_some() {
+        let mut entries = vec![
+            (Value::text("created_at"), Value::text(created_at)),
+            (Value::text("description"), Value::text(description)),
+        ];
+        if let Some(by) = &created_by {
+            entries.push((Value::text("created_by"), Value::text(by)));
+        }
+        Some(Value::Map(entries))
+    } else {
+        None
+    };
+
+    Bundle { attestations, media, manifest }
 }

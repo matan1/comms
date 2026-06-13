@@ -103,6 +103,43 @@ impl Attestation {
     pub fn id(&self) -> String {
         crate::attestation_id(&self.core)
     }
+
+    /// Reconstruct the signed envelope `Value`: the core map with the `s`
+    /// signature array re-inserted. Inverse of `bundle::attestation_from_value`.
+    /// `cbor::encode` canonicalizes key order, so this yields the same bytes the
+    /// envelope was parsed from (and the same bytes Python's `to_envelope`
+    /// produces for an equivalent attestation).
+    pub fn to_envelope_value(&self) -> Value {
+        let mut entries = match &self.core {
+            Value::Map(core_entries) => core_entries.clone(),
+            other => return other.clone(),
+        };
+        let sigs = self.signatures.iter().map(sig_to_value).collect();
+        entries.push((Value::text("s"), Value::Array(sigs)));
+        Value::Map(entries)
+    }
+
+    /// Canonical CBOR bytes of the full envelope (core + signatures).
+    pub fn to_cbor(&self) -> Vec<u8> {
+        cbor::encode(&self.to_envelope_value())
+    }
+}
+
+/// Serialize a signature object to its envelope `Value`. Mirrors the parse in
+/// `bundle::attestation_from_value`: `{by, alg, role, signed_at, signature}`
+/// plus `keyset` iff present (set signatures).
+fn sig_to_value(sig: &SignatureObject) -> Value {
+    let mut entries = vec![
+        (Value::text("by"), Value::text(&sig.by)),
+        (Value::text("alg"), Value::text(&sig.alg)),
+        (Value::text("role"), Value::text(&sig.role)),
+        (Value::text("signed_at"), Value::text(&sig.signed_at)),
+        (Value::text("signature"), Value::Bytes(sig.signature.clone())),
+    ];
+    if let Some(keyset) = &sig.keyset {
+        entries.push((Value::text("keyset"), Value::text(keyset)));
+    }
+    Value::Map(entries)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

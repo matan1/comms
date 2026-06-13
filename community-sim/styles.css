@@ -205,6 +205,33 @@ button.primary:hover { background: #38423f; }
   color: #5e356e;
 }
 
+.param-axis {
+  margin: 8px 0 3px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 2px;
+}
+
+.preset-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-top: 8px;
+  margin-bottom: 2px;
+}
+
+.btn-preset {
+  padding: 4px 4px;
+  font-size: 11px;
+  text-align: center;
+  border-color: rgba(94, 53, 110, 0.4);
+  color: #5e356e;
+}
+
 /* --- Legend --- */
 
 .legend {
@@ -252,6 +279,18 @@ button.primary:hover { background: #38423f; }
   border: 1.5px solid #4f8f8b;
   opacity: 0.7;
 }
+
+.edge-line {
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  display: inline-block;
+  align-self: center;
+  opacity: 0.75;
+}
+.edge-line.endorse { background: var(--good); }
+.edge-line.object  { background: var(--bad); }
+.edge-line.deal    { background: var(--warn); }
 
 .legend-note {
   margin: 8px 0 0;

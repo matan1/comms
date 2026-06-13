@@ -129,7 +129,12 @@ def write_pending(name: str, att: Attestation, needs: list[dict]) -> None:
 def read_pending() -> dict[str, tuple[Attestation, list[dict]]]:
     out = {}
     for f in sorted(PENDING.glob("*.cbor")):
-        needs = json.loads((PENDING / f"{f.stem}.needs.json").read_text())
+        needs_path = PENDING / f"{f.stem}.needs.json"
+        if not needs_path.exists():
+            print(f"  (skipping {f.name}: no matching .needs.json — "
+                  "not a pending item, leaving it be)")
+            continue
+        needs = json.loads(needs_path.read_text())
         out[f.stem] = (Attestation.from_cbor(f.read_bytes()), needs)
     return out
 

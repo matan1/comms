@@ -20,7 +20,7 @@ def test_attest_vectors_regenerate_identically(repo_root, tmp_path):
 
 
 def test_steward_vectors_regenerate_identically(repo_root, tmp_path):
-    run(repo_root / "steward_vectors.py", repo_root, tmp_path)
+    run(repo_root / "comms" / "steward_vectors.py", repo_root, tmp_path)
     fresh = (tmp_path / "steward-test-vectors.json").read_bytes()
     committed = (repo_root / "data" / "steward-test-vectors.json").read_bytes()
     assert fresh == committed

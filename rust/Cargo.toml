@@ -17,6 +17,10 @@ bs58 = "0.5"
 hex = "0.4"
 serde_json = "1"
 
+[[bin]]
+name = "comms-verify"
+path = "main.rs"
+
 [[test]]
 name = "golden"
 path = "golden.rs"

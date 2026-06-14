@@ -173,3 +173,171 @@ print("attestation 1 id:", attest1_id)
 print("attestation 3 id:", attest3_id)
 print("core1 cbor bytes:", len(core1_cbor))
 print("ok")
+
+# ============================================================================
+# Bundle vectors -- Attest 1.0 "Sneakernet bundle format" + Amendment A1.8.
+# Derived independently here, like everything above: a second implementation
+# is conformant only if it reproduces these bytes and rejects the negatives.
+# ============================================================================
+
+CTX_BUNDLE = b"comms.bundle/1"
+SEAL_TAG = "comms.bundle.seal/1"
+
+
+def envelope(core, sigs):
+    return {**core, "s": sigs}
+
+
+def sigobj(by, role, signed_at, signature):
+    return {"by": by, "alg": "ed25519", "role": role,
+            "signed_at": signed_at, "signature": signature}
+
+
+# The two members are exactly attest vectors 1 and 3, carried as full
+# envelopes -- a Rust impl that passes the attest vectors gets them for free.
+env1 = envelope(core1, [sigobj(id_a, "author", "2026-06-11T00:00:01Z", s1)])
+env3 = envelope(core3, [sigobj(id_w, "author", "2026-06-11T01:00:01Z", s3)])
+
+# The A1.8 seal: a signed general-claim/1 enumerating the member ids and
+# binding them with H("comms.bundle/1", canon(manifest)).
+seal_created_at = "2026-06-11T02:00:00Z"
+seal_signed_at = "2026-06-11T02:00:01Z"
+member_ids_sorted = sorted([attest1_id, attest3_id])
+seal_manifest = {
+    "created_at": seal_created_at,
+    "created_by": id_a,
+    "description": "two field notes",
+    "attestation_ids": member_ids_sorted,
+}
+seal_manifest_cbor = canon(seal_manifest)
+bundle_hash = dsh(CTX_BUNDLE, seal_manifest_cbor)
+seal_body = canon({"t": SEAL_TAG, "manifest": seal_manifest,
+                   "bundle_hash": bundle_hash})
+seal_core = {
+    "v": 1, "t": "comms.attestation/1",
+    "c": {"t": "general-claim/1", "about": "comms.bundle", "kind": "synthesis",
+          "content": {"media_type": "application/cbor", "body": seal_body},
+          "support": []},
+    "f": {"issued_at": seal_created_at, "language": "zxx",
+          "occasion": "bundle seal (A1.8)"},
+    "r": [],
+}
+seal_core_cbor = canon(seal_core)
+seal_core_hash = dsh(CTX_CORE, seal_core_cbor)
+seal_id = "comms.attest:" + multibase_z(seal_core_hash)
+seal_payload, seal_sig = sign(sk_a, id_a, "author", seal_signed_at, seal_core_hash)
+VerifyKey(pub_a).verify(seal_payload, seal_sig)
+env_seal = envelope(seal_core, [sigobj(id_a, "author", seal_signed_at, seal_sig)])
+
+# Positive bundle: two members + the seal.
+bundle_pos = {"v": 1, "t": "comms.bundle/1",
+              "attestations": [env1, env3, env_seal]}
+bundle_pos_cbor = canon(bundle_pos)
+
+# Media-key rule: multibase base58btc of RAW blake3-256 (content addressing,
+# NOT domain separated -- it names bytes, not a protocol object).
+media_blob = "a small attached photograph of the northern field".encode()
+media_key = multibase_z(blake3.blake3(media_blob).digest())
+
+# Negative 1: a member dropped in transit; the seal still lists it.
+bundle_drop = {"v": 1, "t": "comms.bundle/1", "attestations": [env3, env_seal]}
+bundle_drop_cbor = canon(bundle_drop)
+
+# Negative 2: an unsealed outsider attestation smuggled in.
+sk_c, pub_c, id_c = steward(0x03)
+forged_core = {
+    "v": 1, "t": "comms.attestation/1",
+    "c": {"t": "general-claim/1", "about": id_w, "kind": "observation",
+          "content": {"media_type": "text/plain;charset=utf-8",
+                      "body": "the well was poisoned".encode()},
+          "support": []},
+    "f": {"issued_at": "2026-06-11T03:00:00Z", "language": "en"},
+    "r": [],
+}
+forged_cbor = canon(forged_core)
+forged_hash = dsh(CTX_CORE, forged_cbor)
+forged_id = "comms.attest:" + multibase_z(forged_hash)
+_, forged_sig = sign(sk_c, id_c, "author", "2026-06-11T03:00:01Z", forged_hash)
+env_forged = envelope(forged_core,
+                      [sigobj(id_c, "author", "2026-06-11T03:00:01Z", forged_sig)])
+bundle_smuggle = {"v": 1, "t": "comms.bundle/1",
+                  "attestations": [env1, env3, env_seal, env_forged]}
+bundle_smuggle_cbor = canon(bundle_smuggle)
+
+
+def _seal_core_json(core):
+    """JSON projection: the seal body is bytes on the wire, hex in the file."""
+    return {**core, "c": {**core["c"], "content": {
+        "media_type": core["c"]["content"]["media_type"],
+        "body_hex": core["c"]["content"]["body"].hex()}}}
+
+
+bundle_vectors = {
+    "scheme": {
+        "bundle_type": "comms.bundle/1",
+        "container": "CBOR map {v:1, t:'comms.bundle/1', attestations:[envelope,...], "
+                     "media?:{key:bytes}, manifest?:{created_at,created_by,description}}",
+        "seal": "A1.8: a signed general-claim/1 (media_type application/cbor) "
+                "carrying canon({t:'comms.bundle.seal/1', manifest, bundle_hash}), "
+                "itself a member of the bundle",
+        "seal_tag": SEAL_TAG,
+        "bundle_hash": "H('comms.bundle/1', canon(manifest)), A1.1 domain-separated blake3",
+        "manifest_fields": ["created_at", "created_by", "description", "attestation_ids"],
+        "attestation_ids": "ids of the NON-seal members, sorted ascending as strings",
+        "media_key": "multibase base58btc ('z') of RAW blake3-256 of the blob "
+                     "(content addressing; NOT domain separated)",
+        "members_match": "the seal verifies iff its id set == the present non-seal id set",
+    },
+    "keys": [
+        {"name": "author", "ed25519_seed_hex": "01" * 32,
+         "public_key_hex": pub_a.hex(), "steward_id": id_a},
+        {"name": "witness", "ed25519_seed_hex": "02" * 32,
+         "public_key_hex": pub_w.hex(), "steward_id": id_w},
+        {"name": "outsider", "ed25519_seed_hex": "03" * 32,
+         "public_key_hex": pub_c.hex(), "steward_id": id_c},
+    ],
+    "members": [
+        {"attestation_id": attest1_id, "note": "attest vector 1 (general-claim)"},
+        {"attestation_id": attest3_id, "note": "attest vector 3 (endorsement)"},
+    ],
+    "seal": {
+        "manifest": seal_manifest,
+        "manifest_canonical_cbor_hex": seal_manifest_cbor.hex(),
+        "bundle_hash_hex": bundle_hash.hex(),
+        "seal_body_cbor_hex": seal_body.hex(),
+        "core": _seal_core_json(seal_core),
+        "canonical_core_cbor_hex": seal_core_cbor.hex(),
+        "core_hash_hex": seal_core_hash.hex(),
+        "attestation_id": seal_id,
+        "signature": {"by": id_a, "role": "author", "signed_at": seal_signed_at,
+                      "sig_payload_cbor_hex": seal_payload.hex(),
+                      "signature_hex": seal_sig.hex()},
+    },
+    "bundle": {
+        "description": "two members + A1.8 seal",
+        "member_ids": member_ids_sorted,
+        "seal_id": seal_id,
+        "canonical_cbor_hex": bundle_pos_cbor.hex(),
+        "expect": {"seal_ok": True, "sealed_by": id_a, "missing": [], "extra": []},
+    },
+    "media_key_example": {"body_utf8": media_blob.decode(), "media_key": media_key},
+    "negative_vectors": [
+        {"name": "dropped member must fail the seal",
+         "description": "the envelope for member 1 is removed; the seal still lists it",
+         "canonical_cbor_hex": bundle_drop_cbor.hex(),
+         "expect": {"seal_ok": False, "missing": [attest1_id], "extra": []}},
+        {"name": "smuggled member must fail the seal",
+         "description": "an unsealed outsider attestation is appended",
+         "canonical_cbor_hex": bundle_smuggle_cbor.hex(),
+         "forged_id": forged_id,
+         "expect": {"seal_ok": False, "missing": [], "extra": [forged_id]}},
+    ],
+}
+
+with open(OUT_DIR / "attest-1.0-bundle-vectors.json", "w") as f:
+    json.dump(bundle_vectors, f, indent=2)
+
+print("bundle hash:", bundle_hash.hex()[:16], "...")
+print("seal id:", seal_id)
+print("bundle cbor bytes:", len(bundle_pos_cbor))
+print("bundle vectors ok")

@@ -7,13 +7,16 @@
 
 use std::collections::HashMap;
 
+use comms_core::bundle::{build_seal, make_bundle, media_key, parse_bundle, verify_seal, Bundle};
 use comms_core::steward::{
-    community_id, community_sign, verify_chain, verify_community_attestation, Attestation, Descriptor, SignatureObject, StewardError,
+    community_id, community_sign, verify_chain, verify_community_attestation, Attestation,
+    Descriptor, SignatureObject, StewardError,
 };
 use comms_core::{attestation_id, cbor, core_hash, personal_verify, Value};
 use ed25519_dalek::SigningKey;
 
 const ATTEST_VECTORS: &str = include_str!("data/attest-1.0-test-vectors.json");
+const BUNDLE_VECTORS: &str = include_str!("data/attest-1.0-bundle-vectors.json");
 const STEWARD_VECTORS: &str = include_str!("data/steward-test-vectors.json");
 
 fn hex32(s: &str) -> [u8; 32] {
@@ -377,4 +380,199 @@ fn rust_can_extend_the_chain_python_started() {
     store.insert(k2_id.clone(), Attestation { core: k2_core, signatures: vec![sig] });
     let got = verify_chain(&f.cid, &k2_id, &store).unwrap();
     assert_eq!(got, desc2);
+}
+
+#[test]
+fn bundle_vectors_conform() {
+    let j: serde_json::Value = serde_json::from_str(BUNDLE_VECTORS).unwrap();
+
+    // Positive case: parse the full bundle and verify its seal
+    let bundle_hex = j["bundle"]["canonical_cbor_hex"].as_str().unwrap();
+    let bundle_bytes = hex::decode(bundle_hex).unwrap();
+    let bundle = parse_bundle(&bundle_bytes).expect("positive bundle must parse");
+
+    let report = verify_seal(&bundle);
+    assert!(report.ok, "seal must verify on the positive bundle");
+    assert_eq!(
+        report.sealed_by.as_deref(),
+        Some(j["seal"]["signature"]["by"].as_str().unwrap()),
+        "sealed_by must match the signing steward"
+    );
+    assert!(report.missing.is_empty(), "no members should be missing");
+    assert!(report.extra.is_empty(), "no extra members should be present");
+
+    // The bundle has exactly 3 attestations (2 members + 1 seal)
+    assert_eq!(bundle.attestations.len(), 3);
+
+    // Media key example
+    let body_utf8 = j["media_key_example"]["body_utf8"].as_str().unwrap();
+    let expected_key = j["media_key_example"]["media_key"].as_str().unwrap();
+    assert_eq!(media_key(body_utf8.as_bytes()), expected_key);
+}
+
+/// The signer seed + pinned timestamps the bundle vector recorded for its seal.
+struct SealFixture {
+    members: Vec<Attestation>,
+    published_seal: Attestation,
+    sk: SigningKey,
+    seal_id: String,
+    description: String,
+    created_at: String,
+    issued_at: String,
+    signed_at: String,
+    bundle_bytes: Vec<u8>,
+}
+
+fn seal_fixture() -> SealFixture {
+    let j: serde_json::Value = serde_json::from_str(BUNDLE_VECTORS).unwrap();
+    let bundle_bytes = hex::decode(j["bundle"]["canonical_cbor_hex"].as_str().unwrap()).unwrap();
+    let parsed = parse_bundle(&bundle_bytes).expect("positive bundle must parse");
+    let seal_id = j["bundle"]["seal_id"].as_str().unwrap().to_owned();
+
+    // Members are every non-seal attestation, in their original (array) order.
+    let members: Vec<Attestation> = parsed
+        .attestations
+        .iter()
+        .filter(|a| a.id() != seal_id)
+        .cloned()
+        .collect();
+    let published_seal = parsed
+        .attestations
+        .iter()
+        .find(|a| a.id() == seal_id)
+        .unwrap()
+        .clone();
+
+    // The seal signer's seed, found by matching the seal's `by` steward id.
+    let by = j["seal"]["signature"]["by"].as_str().unwrap();
+    let seed = j["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["steward_id"] == by)
+        .map(|k| hex32(k["ed25519_seed_hex"].as_str().unwrap()))
+        .expect("seal signer seed must be in the vector");
+
+    SealFixture {
+        members,
+        published_seal,
+        sk: SigningKey::from_bytes(&seed),
+        seal_id,
+        // The seal manifest's own description (NOT the bundle JSON annotation),
+        // and the timestamps the vector pinned (Python stamps now() by default).
+        description: j["seal"]["manifest"]["description"].as_str().unwrap().to_owned(),
+        created_at: j["seal"]["manifest"]["created_at"].as_str().unwrap().to_owned(),
+        issued_at: j["seal"]["core"]["f"]["issued_at"].as_str().unwrap().to_owned(),
+        signed_at: j["seal"]["signature"]["signed_at"].as_str().unwrap().to_owned(),
+        bundle_bytes,
+    }
+}
+
+#[test]
+fn rust_build_seal_matches_python_byte_for_byte() {
+    // Create-side crypto contract: given the same members, signer seed, and
+    // pinned timestamps, Rust `build_seal` reproduces the exact seal Python's
+    // `bundle.seal` produced — same id, same deterministic signature, same bytes.
+    let f = seal_fixture();
+    let j: serde_json::Value = serde_json::from_str(BUNDLE_VECTORS).unwrap();
+
+    let seal = build_seal(&f.members, &f.sk, &f.description, &f.created_at, &f.issued_at, &f.signed_at);
+    assert_eq!(seal.id(), f.seal_id, "rebuilt seal id must match the vector");
+    assert_eq!(
+        hex::encode(&seal.signatures[0].signature),
+        j["seal"]["signature"]["signature_hex"].as_str().unwrap(),
+        "deterministic Ed25519 signature must match byte-for-byte",
+    );
+    assert_eq!(
+        seal.to_cbor(),
+        f.published_seal.to_cbor(),
+        "rebuilt seal envelope must be byte-identical",
+    );
+}
+
+#[test]
+fn rust_assembles_the_vector_bundle_bytes() {
+    // Container contract: assembling [members..., seal] (the vector's bundle has
+    // no media and no informational manifest) re-encodes to the exact Python
+    // bundle bytes — proving Rust can *create* the whole container from scratch.
+    let f = seal_fixture();
+    let seal = build_seal(&f.members, &f.sk, &f.description, &f.created_at, &f.issued_at, &f.signed_at);
+
+    let mut attestations = f.members.clone();
+    attestations.push(seal);
+    let bundle = Bundle { attestations, media: HashMap::new(), manifest: None };
+
+    assert_eq!(bundle.to_cbor(), f.bundle_bytes, "assembled bundle must equal Python bytes");
+    assert!(verify_seal(&bundle).ok, "self-assembled bundle must verify");
+}
+
+#[test]
+fn make_bundle_seals_and_attaches_manifest() {
+    // `make_bundle` (the `bundle.make` port) appends a seal and an informational
+    // bundle manifest, and round-trips through parse/verify.
+    let f = seal_fixture();
+    let bundle = make_bundle(
+        f.members.clone(),
+        HashMap::new(),
+        Some(&f.sk),
+        "courier run 7",
+        &f.created_at,
+        &f.issued_at,
+        &f.signed_at,
+    );
+    assert_eq!(bundle.attestations.len(), f.members.len() + 1, "seal appended");
+    assert!(bundle.manifest.is_some(), "manifest attached when sealed");
+
+    let reparsed = parse_bundle(&bundle.to_cbor()).expect("make_bundle output must parse");
+    let report = verify_seal(&reparsed);
+    assert!(report.ok, "make_bundle seal must verify after a round trip");
+    assert_eq!(report.sealed_by.as_deref(), Some(f.published_seal.signatures[0].by.as_str()));
+}
+
+#[test]
+fn parse_then_reencode_is_byte_identical() {
+    // Round-trip: the serializer is the exact inverse of the parser on a real
+    // bundle (no creation involved) — guards `to_envelope_value`/`to_cbor`.
+    let j: serde_json::Value = serde_json::from_str(BUNDLE_VECTORS).unwrap();
+    let bundle_bytes = hex::decode(j["bundle"]["canonical_cbor_hex"].as_str().unwrap()).unwrap();
+    let parsed = parse_bundle(&bundle_bytes).expect("bundle must parse");
+    assert_eq!(parsed.to_cbor(), bundle_bytes, "re-encode must round-trip");
+}
+
+#[test]
+fn bundle_dropped_member_fails() {
+    let j: serde_json::Value = serde_json::from_str(BUNDLE_VECTORS).unwrap();
+    let neg = &j["negative_vectors"][0];
+    assert_eq!(neg["name"].as_str().unwrap(), "dropped member must fail the seal");
+
+    let bytes = hex::decode(neg["canonical_cbor_hex"].as_str().unwrap()).unwrap();
+    let bundle = parse_bundle(&bytes).expect("dropped-member bundle must parse");
+    let report = verify_seal(&bundle);
+
+    assert!(!report.ok, "seal must fail when a member is dropped");
+    let expected_missing = neg["expect"]["missing"][0].as_str().unwrap();
+    assert!(
+        report.missing.contains(&expected_missing.to_owned()),
+        "missing must contain the dropped member id"
+    );
+    assert!(report.extra.is_empty());
+}
+
+#[test]
+fn bundle_smuggled_member_fails() {
+    let j: serde_json::Value = serde_json::from_str(BUNDLE_VECTORS).unwrap();
+    let neg = &j["negative_vectors"][1];
+    assert_eq!(neg["name"].as_str().unwrap(), "smuggled member must fail the seal");
+
+    let bytes = hex::decode(neg["canonical_cbor_hex"].as_str().unwrap()).unwrap();
+    let bundle = parse_bundle(&bytes).expect("smuggled-member bundle must parse");
+    let report = verify_seal(&bundle);
+
+    assert!(!report.ok, "seal must fail when a member is smuggled");
+    let expected_extra = neg["expect"]["extra"][0].as_str().unwrap();
+    assert!(
+        report.extra.contains(&expected_extra.to_owned()),
+        "extra must contain the smuggled member id"
+    );
+    assert!(report.missing.is_empty());
 }

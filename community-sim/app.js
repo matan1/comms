@@ -69,7 +69,14 @@ const controls = hasDom ? {
   witnessQuorum: byId("witnessQuorum"),
   objectionRate: byId("objectionRate"),
   arrivalRate: byId("arrivalRate"),
-  speed: byId("speed")
+  speed: byId("speed"),
+  aDelay: byId("aDelay"),
+  aDefect: byId("aDefect"),
+  aSelect: byId("aSelect"),
+  aCover: byId("aCover"),
+  aSocial: byId("aSocial"),
+  aRecovery: byId("aRecovery"),
+  aFaction: byId("aFaction")
 } : null;
 
 // --- Parameters ---------------------------------------------------------------
@@ -96,7 +103,16 @@ function normalizeParams(raw) {
     witnessQuorum: Math.round(raw.witnessQuorum ?? 5),
     objectionRate: (raw.objectionRate ?? 40) / 100,
     arrivalRate: (raw.arrivalRate ?? 35) / 100,
-    speed: raw.speed ?? 5
+    speed: raw.speed ?? 5,
+    adversary: {
+      activationDelay:  raw.aDelay   ?? 0,
+      defectRate:      (raw.aDefect  ?? 55) / 100,
+      selectivity:     (raw.aSelect  ?? 0)  / 100,
+      coverRate:       (raw.aCover   ?? 0)  / 100,
+      socialInvestment:(raw.aSocial  ?? 0)  / 100,
+      recoveryRate:    (raw.aRecovery ?? 0) / 100,
+      networkSubversion:(raw.aFaction ?? 0) / 100,
+    }
   };
 }
 
@@ -135,6 +151,44 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function pick(items) {
   return items.length ? items[Math.floor(rand() * items.length) % items.length] : null;
+}
+
+// --- Adversary helpers -------------------------------------------------------
+// An adversary is a villager with archetype "adversary" and a filled `ap`
+// (adversary-params) object sourced from the sliders at inject time.  The
+// classic "defector" archetype keeps its old fixed-rate logic so existing
+// simulations are unaffected.
+
+function adversaryIsActive(v) {
+  if (!v.ap) return false;
+  if (state.day < (v.lyingLowUntil || 0)) return false;
+  if (v.joinedDay !== null && (state.day - v.joinedDay) < v.ap.activationDelay) return false;
+  return true;
+}
+
+// Returns true if the adversary seller should betray this buyer in this deal.
+// Selectivity skips low-trust targets; cover instinct scales back when
+// multiple witnesses are present.
+function adversaryBetray(seller, buyer, witnesses) {
+  if (!adversaryIsActive(seller)) return false;
+  const ap = seller.ap;
+  if (ap.selectivity > 0.01) {
+    const trust = state.cached.mean.get(buyer.id) ?? 0.5;
+    if (trust < ap.selectivity * 0.65) return false;
+  }
+  const witnessFactor = 1 - ap.coverRate * Math.min(witnesses.length, 4) / 4;
+  return rand() < ap.defectRate * witnessFactor;
+}
+
+// After taking heat (objections), a high-recovery adversary lies low.
+function adversaryMaybeLieLow(v) {
+  if (!v.ap || v.ap.recoveryRate < 0.01) return;
+  const recentObj = state.attestations
+    .filter(a => a.type === "objection/1" && a.target === v.id && a.day >= state.day - 4)
+    .length;
+  if (recentObj >= 1 && rand() < v.ap.recoveryRate) {
+    v.lyingLowUntil = state.day + Math.max(1, Math.round(v.ap.recoveryRate * 12));
+  }
 }
 
 // Weighted choice. Buyers prefer well-stocked stalls, which has a pointed
@@ -263,7 +317,9 @@ function makeVillager(index, opts = {}) {
     // the per-subject tallies those attestations produce.
     knowledge: new Set(),
     feed: [],
-    beliefs: new Map()
+    beliefs: new Map(),
+    ap: null,
+    lyingLowUntil: 0
   };
 }
 
@@ -445,10 +501,16 @@ function phaseMarket(p) {
     const options = sellers.filter((s) => s !== buyer && s.specialty !== buyer.specialty && s.stock > 0.5);
     const seller = weightedPick(options, (s) => s.stock);
     if (!seller) continue;
-    const cheat = seller.archetype === "defector" && seller.member;
-    const failed = cheat ? rand() < 0.55 : rand() < 0.07;
-    seller.stock = Math.max(0, seller.stock - 0.8);
     const witnesses = nearestOthers(attendees, buyer, 2);
+    let failed;
+    if (seller.archetype === "adversary" && seller.member) {
+      failed = adversaryBetray(seller, buyer, witnesses);
+    } else if (seller.archetype === "defector" && seller.member) {
+      failed = rand() < 0.55;
+    } else {
+      failed = rand() < 0.07;
+    }
+    seller.stock = Math.max(0, seller.stock - 0.8);
     addAttestation({
       type: "deal-record/1",
       by: buyer.id,
@@ -466,6 +528,19 @@ function phaseMarket(p) {
           detail: { kind: "procedural", grounds: "delivery shortfall" },
           at: world.market
         }, [buyer, ...witnesses]);
+      }
+      if (seller.archetype === "adversary") adversaryMaybeLieLow(seller);
+    } else if (!failed && seller.archetype === "adversary" && adversaryIsActive(seller)) {
+      // Endorsement farming: on a clean deal, may coax a positive attestation from the buyer.
+      const ap = seller.ap;
+      if (ap && ap.socialInvestment > 0.01 && rand() < ap.socialInvestment * 0.5) {
+        addAttestation({
+          type: "endorsement/1",
+          by: buyer.id,
+          target: seller.id,
+          detail: { in_capacity: "market-deal", weight: "secondary" },
+          at: world.market
+        }, [buyer, seller, ...witnesses]);
       }
     }
   }
@@ -517,7 +592,13 @@ function phaseCommons(p) {
     const sponsors = attendees.filter((v) => perceivedTrust(v, candidate.id) > 0.55);
     const objectors = attendees.filter((v) =>
       perceivedTrust(v, candidate.id) < 0.34 && rand() < 0.3 + p.objectionRate * 0.7);
-    const committed = sponsors.length >= p.sponsors
+    // Network subversion: an adversary candidate's faction nudges the sponsor tally.
+    let bonusSponsors = 0;
+    if (candidate.archetype === "adversary" && candidate.ap) {
+      const ns = candidate.ap.networkSubversion;
+      if (ns > 0.01) bonusSponsors = Math.floor(ns * 2 * rand());
+    }
+    const committed = (sponsors.length + bonusSponsors) >= p.sponsors
       && attendees.length >= p.witnessQuorum
       && objectors.length <= Math.floor(attendees.length * 0.25);
 
@@ -585,27 +666,26 @@ function failureReason(p, sponsors, witnesses, objections) {
   return `${objections} objections at the commons stalled it.`;
 }
 
-function arrive(archetype) {
+function arrive(archetype, ap = null) {
   const v = makeVillager(state.nextVillager++, {
     member: false,
     archetype,
     home: { ...world.camp },
     pos: { x: 0.14, y: 0.99 }
   });
-  if (archetype === "defector") v.capability = clamp(0.85 + rand() * 0.3, 0.2, 1.15);
+  if (archetype === "defector" || archetype === "adversary") {
+    v.capability = clamp(0.85 + rand() * 0.3, 0.2, 1.15);
+  }
+  if (archetype === "adversary" && ap) v.ap = ap;
   v.arrivedDay = state.day;
   state.villagers.push(v);
   state.byId.set(v.id, v);
+  const suspicious = archetype === "defector" || archetype === "adversary";
   logEvent("ceremony-record/1", `${v.label} arrived by the south road`,
-    archetype === "defector"
+    suspicious
       ? "A well-presented newcomer. The pledges will tell."
       : "A newcomer makes camp by the commons and waits to petition.");
   return v;
-}
-
-function injectDefector() {
-  arrive("defector");
-  renderStatic();
 }
 
 // --- Gossip -----------------------------------------------------------------------
@@ -990,7 +1070,7 @@ function drawVillagers(ctx, w, h) {
 
     // Ground truth is a debug privilege: defectors are only marked when no
     // villager's viewpoint is selected.
-    if (!vp && v.archetype === "defector") {
+    if (!vp && (v.archetype === "defector" || v.archetype === "adversary")) {
       ctx.save();
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
@@ -1015,6 +1095,35 @@ function drawVillagers(ctx, w, h) {
       ctx.font = "11px ui-monospace, monospace";
       ctx.fillText(v.label, x + r + 4, y + 4);
     }
+  }
+}
+
+function recentSocialEdges(window) {
+  const minDay = state.day - window;
+  const vp = viewpoint();
+  const edges = [];
+  for (let i = state.attestations.length - 1; i >= 0; i--) {
+    const att = state.attestations[i];
+    if (att.day < minDay) break;
+    if (!att.by || !att.target) continue;
+    if (vp && !vp.knowledge.has(att.idx)) continue;
+    const from = state.byId.get(att.by);
+    const to = state.byId.get(att.target);
+    if (!from || !to) continue;
+    edges.push({ from, to, type: att.type, age: state.day - att.day });
+  }
+  return edges;
+}
+
+function drawEdges(ctx, w, h) {
+  for (const { from, to, type, age } of recentSocialEdges(3)) {
+    const alpha = (1 - age / 3) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(from.pos.x * w, from.pos.y * h);
+    ctx.lineTo(to.pos.x * w, to.pos.y * h);
+    ctx.strokeStyle = hexToRgba(attColors[type] || "#637074", alpha);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   }
 }
 
@@ -1080,6 +1189,7 @@ function frame(now) {
   const w = ui.canvas.clientWidth;
   const h = ui.canvas.clientHeight;
   drawWorld(ctx, w, h);
+  drawEdges(ctx, w, h);
   drawPulses(ctx, w, h, dt);
   drawVillagers(ctx, w, h);
 
@@ -1137,6 +1247,25 @@ function renderInspector() {
 
   const strangers = state.villagers.filter((o) => isStrangerTo(v, o.id)).length;
 
+  const recentActs = [];
+  for (let i = state.attestations.length - 1; i >= 0 && recentActs.length < 5; i--) {
+    const a = state.attestations[i];
+    if (a.day < state.day - 1) break;
+    if (!v.knowledge.has(a.idx)) continue;
+    if (a.by !== v.id && a.target !== v.id) continue;
+    const other = state.byId.get(a.by === v.id ? a.target : a.by);
+    if (!other) continue;
+    const isByMe = a.by === v.id;
+    let desc;
+    if (a.type === "endorsement/1") desc = isByMe ? `endorsed ${other.label}` : `endorsed by ${other.label}`;
+    else if (a.type === "objection/1") desc = isByMe ? `objected to ${other.label}` : `objected to by ${other.label}`;
+    else if (a.type === "deal-record/1") {
+      const broken = a.detail.outcome !== "completed";
+      desc = isByMe ? `${broken ? "broke pledge to" : "dealt with"} ${other.label}` : `${broken ? "pledge broken by" : "deal with"} ${other.label}`;
+    } else continue;
+    recentActs.push({ desc, color: attColors[a.type] || "#637074", day: a.day });
+  }
+
   ui.inspector.hidden = false;
   ui.inspector.innerHTML = `
     <button type="button" class="inspector-close" aria-label="Return to omniscient view">&times;</button>
@@ -1158,6 +1287,12 @@ function renderInspector() {
             sees ${Math.round(d.mine * 100)}%, village mean ${Math.round((d.mine - d.gap) * 100)}%
             <em>${d.gap > 0.04 ? "(hasn't heard the bad news)" : d.gap < -0.04 ? "(knows something the village doesn't)" : ""}</em>
           </li>`).join("")}
+      </ul>` : ""}
+    ${recentActs.length ? `
+      <p class="inspector-sub">Recent (last 2 days):</p>
+      <ul class="inspector-beliefs">
+        ${recentActs.map((a) => `
+          <li><i style="background:${a.color}"></i><span>d${a.day} — ${a.desc}</span></li>`).join("")}
       </ul>` : ""}
     <p class="inspector-note">The whole map is now colored by ${v.label}'s beliefs. Gray villagers are strangers — ${v.label} holds no attestation about them.</p>
   `;
@@ -1186,6 +1321,41 @@ function canvasClick(ev) {
   renderStatic();
 }
 
+// --- Adversary presets & injection -------------------------------------------
+
+function setAdversaryPreset(name) {
+  const presets = {
+    classic:     { aDelay:  0, aDefect: 55, aSelect:   0, aCover:  0, aSocial:  0, aRecovery:  0, aFaction:  0 },
+    sleeper:     { aDelay: 30, aDefect: 70, aSelect:   0, aCover: 20, aSocial: 20, aRecovery:  0, aFaction:  0 },
+    selective:   { aDelay:  5, aDefect: 60, aSelect:  80, aCover: 40, aSocial:  0, aRecovery:  0, aFaction:  0 },
+    parasite:    { aDelay:  0, aDefect: 20, aSelect:  20, aCover: 50, aSocial:  0, aRecovery: 40, aFaction:  0 },
+    charmer:     { aDelay:  8, aDefect: 65, aSelect:  40, aCover: 40, aSocial: 80, aRecovery: 30, aFaction:  0 },
+    ghost:       { aDelay:  3, aDefect: 55, aSelect:  50, aCover:100, aSocial:  0, aRecovery:100, aFaction:  0 },
+    freeRider:   { aDelay:  0, aDefect: 15, aSelect:   0, aCover: 40, aSocial: 30, aRecovery: 50, aFaction:  0 },
+    cultivator:  { aDelay:  5, aDefect: 40, aSelect:  30, aCover: 70, aSocial:100, aRecovery: 80, aFaction:  0 },
+    factionist:  { aDelay: 10, aDefect: 40, aSelect:  70, aCover: 60, aSocial: 60, aRecovery: 40, aFaction:100 },
+    infiltrator: { aDelay: 40, aDefect: 50, aSelect:  80, aCover: 80, aSocial: 80, aRecovery: 60, aFaction: 70 },
+    ideologue:   { aDelay:  5, aDefect: 50, aSelect:  75, aCover: 30, aSocial: 50, aRecovery: 20, aFaction: 90 },
+    brinksman:   { aDelay:  5, aDefect: 70, aSelect: 100, aCover: 75, aSocial: 20, aRecovery: 50, aFaction:  0 },
+    flash:       { aDelay:  0, aDefect: 90, aSelect:   0, aCover:  0, aSocial:  0, aRecovery:  0, aFaction:  0 },
+    patriarch:   { aDelay: 50, aDefect: 60, aSelect:  50, aCover: 80, aSocial:100, aRecovery: 50, aFaction: 60 },
+    wrecker:     { aDelay:  0, aDefect: 65, aSelect:   0, aCover:  0, aSocial: 20, aRecovery:  0, aFaction: 80 },
+    sovereign:   { aDelay: 15, aDefect: 75, aSelect:  70, aCover: 70, aSocial: 70, aRecovery: 60, aFaction: 70 },
+  };
+  const p = presets[name];
+  if (!p || !hasDom) return;
+  for (const [k, v] of Object.entries(p)) {
+    const el = byId(k);
+    if (el) el.value = v;
+  }
+  syncOutputs();
+}
+
+function injectAdversary() {
+  arrive("adversary", params().adversary);
+  if (hasDom) renderStatic();
+}
+
 function syncOutputs() {
   const map = {
     population: (v) => v,
@@ -1197,7 +1367,14 @@ function syncOutputs() {
     sponsors: (v) => v,
     witnessQuorum: (v) => v,
     objectionRate: (v) => `${v}%`,
-    arrivalRate: (v) => `${v}%`
+    arrivalRate: (v) => `${v}%`,
+    aDelay:    (v) => v === 0 ? "immediate" : `day ${v}`,
+    aDefect:   (v) => `${v}%`,
+    aSelect:   (v) => v === 0 ? "indiscrim." : v >= 80 ? "high-trust" : `${v}%`,
+    aCover:    (v) => v === 0 ? "none" : `${v}%`,
+    aSocial:   (v) => `${v}%`,
+    aRecovery: (v) => `${v}%`,
+    aFaction:  (v) => `${v}%`
   };
   for (const key of Object.keys(map)) {
     const out = byId(`${key}Out`);
@@ -1218,7 +1395,20 @@ function init() {
     running = false;
     reset();
   });
-  byId("injectBtn").addEventListener("click", injectDefector);
+  byId("injectBtn").addEventListener("click", injectAdversary);
+  const presetMap = {
+    presetClassic: "classic", presetSleeper: "sleeper", presetSelective: "selective",
+    presetParasite: "parasite", presetCharmer: "charmer", presetGhost: "ghost",
+    presetFreeRider: "freeRider", presetCultivator: "cultivator",
+    presetFactionist: "factionist", presetInfiltrator: "infiltrator",
+    presetIdeologue: "ideologue", presetBrinksman: "brinksman",
+    presetFlash: "flash", presetPatriarch: "patriarch",
+    presetWrecker: "wrecker", presetSovereign: "sovereign",
+  };
+  for (const [id, name] of Object.entries(presetMap)) {
+    const btn = byId(id);
+    if (btn) btn.addEventListener("click", () => setAdversaryPreset(name));
+  }
   ui.canvas.addEventListener("click", canvasClick);
 
   syncOutputs();

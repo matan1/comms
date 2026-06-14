@@ -1,3 +1,8 @@
+[workspace]
+# The root package (comms-core) plus the cargo task runner. Sharing one target/
+# keeps `cargo xtask` and the binary in step.
+members = ["xtask"]
+
 [package]
 name = "comms-core"
 version = "0.1.0"
@@ -12,10 +17,16 @@ path = "lib.rs"
 ed25519-dalek = "2"
 blake3 = "1"
 bs58 = "0.5"
+# Pure-Rust; used to read/write steward key files ({seed_b58,label}) and to
+# emit `inspect --json`. Keeps the binary statically linkable (no system libs).
+serde_json = "1"
 
 [dev-dependencies]
 hex = "0.4"
-serde_json = "1"
+
+[[bin]]
+name = "comms-verify"
+path = "main.rs"
 
 [[test]]
 name = "golden"

@@ -78,7 +78,61 @@
               <input id="arrivalRate" type="range" min="0" max="100" value="35" step="5">
               <output id="arrivalRateOut"></output>
             </label>
-            <button id="injectBtn" type="button" title="A well-presented newcomer who will break pledges once admitted">Inject defector</button>
+          </div>
+
+          <div class="control-group">
+            <h2>Adversary <span class="hint">set then inject</span></h2>
+            <p class="param-axis">Temporal</p>
+            <label>Activation delay
+              <input id="aDelay" type="range" min="0" max="50" value="0" step="1">
+              <output id="aDelayOut"></output>
+            </label>
+            <p class="param-axis">Tactical</p>
+            <label>Betrayal intensity
+              <input id="aDefect" type="range" min="0" max="90" value="55" step="5">
+              <output id="aDefectOut"></output>
+            </label>
+            <label>Target selectivity
+              <input id="aSelect" type="range" min="0" max="100" value="0" step="5">
+              <output id="aSelectOut"></output>
+            </label>
+            <label>Cover instinct
+              <input id="aCover" type="range" min="0" max="100" value="0" step="5">
+              <output id="aCoverOut"></output>
+            </label>
+            <p class="param-axis">Social</p>
+            <label>Endorsement farming
+              <input id="aSocial" type="range" min="0" max="100" value="0" step="5">
+              <output id="aSocialOut"></output>
+            </label>
+            <label>Lie-low reflex
+              <input id="aRecovery" type="range" min="0" max="100" value="0" step="5">
+              <output id="aRecoveryOut"></output>
+            </label>
+            <p class="param-axis">Structural</p>
+            <label>Network subversion
+              <input id="aFaction" type="range" min="0" max="100" value="0" step="5">
+              <output id="aFactionOut"></output>
+            </label>
+            <div class="preset-row">
+              <button id="presetClassic"     type="button" class="btn-preset">Classic</button>
+              <button id="presetSleeper"     type="button" class="btn-preset">Sleeper</button>
+              <button id="presetSelective"   type="button" class="btn-preset">Selective</button>
+              <button id="presetParasite"    type="button" class="btn-preset">Parasite</button>
+              <button id="presetCharmer"     type="button" class="btn-preset">Charmer</button>
+              <button id="presetGhost"       type="button" class="btn-preset">Ghost</button>
+              <button id="presetFreeRider"   type="button" class="btn-preset">Free Rider</button>
+              <button id="presetCultivator"  type="button" class="btn-preset">Cultivator</button>
+              <button id="presetFactionist"  type="button" class="btn-preset">Factionist</button>
+              <button id="presetInfiltrator" type="button" class="btn-preset">Infiltrator</button>
+              <button id="presetIdeologue"   type="button" class="btn-preset">Ideologue</button>
+              <button id="presetBrinksman"   type="button" class="btn-preset">Brinksman</button>
+              <button id="presetFlash"       type="button" class="btn-preset">Flash</button>
+              <button id="presetPatriarch"   type="button" class="btn-preset">Patriarch</button>
+              <button id="presetWrecker"     type="button" class="btn-preset">Wrecker</button>
+              <button id="presetSovereign"   type="button" class="btn-preset">Sovereign</button>
+            </div>
+            <button id="injectBtn" type="button" title="Inject adversary with current parameters">Inject adversary</button>
           </div>
 
           <div class="control-group legend-group">
@@ -90,6 +144,9 @@
               <li><i class="dot stranger"></i>stranger — viewpoint holds no record of them</li>
               <li><i class="ring defector"></i>defector (omniscient view only)</li>
               <li><i class="swatch ripple"></i>word of mouth passing between two villagers</li>
+              <li><i class="edge-line endorse"></i>endorsement (recent, fading)</li>
+              <li><i class="edge-line object"></i>objection (recent, fading)</li>
+              <li><i class="edge-line deal"></i>deal record (recent, fading)</li>
             </ul>
             <p class="legend-note">Click a villager to see the village as they believe it. Attestations are born where they happen and travel only by presence and gossip.</p>
           </div>

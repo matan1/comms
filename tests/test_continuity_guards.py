@@ -344,3 +344,72 @@ def test_verify_flags_unarchived_placeholder(trial, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "placeholder" in out
+
+
+# --- Article 7: amendment by supersession ----------------------------------------
+
+def _rule(cc, body, signer, supersedes=None, root="comms.attest:z" + "1" * 44):
+    claim = {"t": "rule/1", "community_name": "Continuity Trial",
+             "document": {"media_type": "text/markdown", "body": body}}
+    refs = [{"role": "context", "id": root}]
+    if supersedes:
+        claim["supersedes"] = supersedes
+        refs.append({"role": "supersedes", "id": supersedes})
+    return cc.Attestation.build(claim, community="continuity-trial",
+                                refs=refs).sign(signer, role="party")
+
+
+def test_amend_stages_superseding_rule(trial):
+    cc, base, store_dir, pending = trial
+    historian = cc.Steward.generate()
+    framer = cc.Steward.generate()
+    session = cc.Steward.generate()
+    session.save(base / "session.key")
+    genesis = _rule(cc, b"# old constitution\n- the model called Claude\n", framer)
+    cc.Store(store_dir).put(genesis)
+    (base / "constitution.md").write_bytes(b"# new constitution\n- any LLM substrate\n")
+
+    cc.cmd_amend(Namespace(
+        constitution=str(base / "constitution.md"), summary="generalize substrate",
+        supersedes=None, root=None, key_file=str(base / "session.key"),
+        historian_pub=historian.id))
+
+    rule, needs = cc.read_pending()["1-amendment"]
+    assert rule.claim["t"] == "rule/1"
+    assert rule.claim["supersedes"] == genesis.id
+    assert {"role": "supersedes", "id": genesis.id} in rule.refs
+    assert any(r["role"] == "context" for r in rule.refs)        # genesis root carried
+    assert rule.signers() == {session.id}                        # session ratifies
+    assert needs == [{"by": historian.id, "role": "party"}]      # historian to co-sign
+
+
+def test_verify_checks_head_constitution_not_genesis(trial, capsys):
+    cc, base, store_dir, pending = trial
+    framer = cc.Steward.generate()
+    hist = cc.Steward.generate()
+    new_body = b"# constitution v2\n- any LLM substrate\n"
+    genesis = _rule(cc, b"# constitution v1\n- the model called Claude\n", framer)
+    amended = _rule(cc, new_body, hist, supersedes=genesis.id)
+    store = cc.Store(store_dir)
+    store.put(genesis); store.put(amended)
+    (base / "constitution.md").write_bytes(new_body)             # live = the amended head
+
+    rc = cc.cmd_verify(Namespace())
+    out = capsys.readouterr().out
+    assert rc == 0                                               # genesis differing is fine
+    assert "current constitution" in out and "matches" in out
+    assert "amendment chain" in out
+
+
+def test_verify_flags_dangling_supersedes(trial, capsys):
+    cc, base, store_dir, pending = trial
+    hist = cc.Steward.generate()
+    body = b"# constitution\n"
+    amended = _rule(cc, body, hist, supersedes="comms.attest:zGhostRuleNotInStore111111")
+    cc.Store(store_dir).put(amended)
+    (base / "constitution.md").write_bytes(body)
+
+    rc = cc.cmd_verify(Namespace())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "dangling" in out

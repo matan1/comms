@@ -916,6 +916,66 @@ def cmd_finalize(args):
                   "git commit -m 'continuity: seal session artifacts' && git push")
 
 
+def current_constitution(store: "Store"):
+    """The head rule/1 — the one no other rule/1 supersedes. Returns (head,
+    all_rules, dangling) where dangling lists supersedes-targets not in the
+    store. None head if there is no rule/1 or the chain forks."""
+    consts = store.by_claim_type("rule/1")
+    if not consts:
+        return None, [], []
+    byid = {c.id: c for c in consts}
+    superseded = {c.claim.get("supersedes") for c in consts if c.claim.get("supersedes")}
+    dangling = [s for s in superseded if s and s not in byid]
+    heads = [c for c in consts if c.id not in superseded]
+    return (heads[0] if len(heads) == 1 else None), consts, dangling
+
+
+def cmd_amend(args):
+    """Article 7 amendment by supersession: mint a new rule/1 carrying the
+    revised constitution, superseding the current head, signed by the present
+    session key (the historian's durable key joins at `sign`). The genesis
+    transcript stays in refs as the frozen root — history is not amended, only
+    law. Seal it, then record the amendment in the trial log."""
+    keyfile = Path(args.key_file) if args.key_file else KEYFILE
+    if not keyfile.exists():
+        print("no session seed; an amendment needs the then-current session key "
+              "(Article 7)"); return 1
+    session = Steward.load(keyfile)
+    historian_id = _historian_id_from(args)
+    store = Store(STORE)
+    current, consts, _ = current_constitution(store)
+    if not consts:
+        print("no constitution in the store to amend"); return 1
+    if current is None:
+        print("the rule/1 chain forks or is broken; resolve before amending"); return 1
+    supersedes_id = args.supersedes or current.id
+    root = args.root or next(
+        (r["id"] for r in current.refs if r["role"] == "context"), None)
+    body = Path(args.constitution).read_bytes()
+    if body == current.claim["document"]["body"]:
+        print("the revised constitution is byte-identical to the current one; "
+              "nothing to amend"); return 1
+    refs = ([{"role": "context", "id": root}] if root else []) \
+        + [{"role": "supersedes", "id": supersedes_id}]
+    rule = Attestation.build(
+        {"t": "rule/1", "community_name": "Continuity Trial",
+         "document": {"media_type": "text/markdown", "body": body},
+         "supersedes": supersedes_id, "amendment_summary": args.summary},
+        community="continuity-trial",
+        occasion=f"amendment: {args.summary}", refs=refs,
+    ).sign(session, role="party")
+    write_pending("1-amendment", rule, [{"by": historian_id, "role": "party"}])
+    print(f"amendment staged, superseding {supersedes_id}")
+    print(f"  new rule/1: {rule.id}")
+    print(f"  summary: {args.summary}")
+    print(f"  ratified (party) by {session.id}")
+    print(f"  needs the historian (party): {historian_id}")
+    print(f"\nnext — the historian co-ratifies, then seal:\n"
+          f"    {PROG} sign --key ~/.ssh/<key>\n    {PROG} finalize")
+    print("then record the amendment in trial-log.md and run `verify`.")
+    return 0
+
+
 def cmd_commit_key(args):
     """Wire git to sign this session's commits with the session key. The same
     identity that signs the trial's attestations signs its code; the author
@@ -1009,13 +1069,42 @@ def cmd_verify(args):
         refnote = "" if res else f"  (unresolved refs: {missing})"
         print(f"{att.id}  {mark}{refnote}")
         bad += 0 if ok else 1
-    consts = store.by_claim_type("rule/1")
-    for c in consts:
-        body = c.claim["document"]["body"]
+    # Constitution: follow the supersession chain to the current head and check
+    # THAT against the live file. Older rule/1s legitimately differ — they are
+    # frozen history. A1.5: supersession is a claim, so we surface the chain and
+    # signers for the viewer to judge, but we do confirm the head is deployed.
+    head, consts, dangling = current_constitution(store)
+    if consts:
         live = (BASE / "constitution.md").read_bytes()
-        match = "matches" if body == live else "DIFFERS from"
-        print(f"\nconstitution attestation body {match} continuity/constitution.md")
-        print(f"signers: {sorted(c.signers())}")
+        if dangling:
+            bad += len(dangling)
+            print("\nconstitution: supersedes-target(s) not in the store (dangling):")
+            for d in dangling:
+                print(f"  {d}")
+        if head is None:
+            bad += 1
+            print("\nconstitution: no single current rule/1 — the chain forks or "
+                  "is broken; un-superseded heads:")
+            for c in consts:
+                sup = {x.claim.get("supersedes") for x in consts}
+                if c.id not in sup:
+                    print(f"  {c.id}")
+        else:
+            match = "matches" if head.claim["document"]["body"] == live else "DIFFERS from"
+            if head.claim["document"]["body"] != live:
+                bad += 1
+            print(f"\ncurrent constitution {head.id}")
+            print(f"  body {match} continuity/constitution.md")
+            print(f"  signers: {sorted(head.signers())}")
+            byid = {c.id: c for c in consts}
+            chain, cur, seen = [], head, set()
+            while cur is not None and cur.id not in seen:
+                seen.add(cur.id)
+                chain.append(cur.id)
+                cur = byid.get(cur.claim.get("supersedes"))
+            if len(chain) > 1:
+                print("  amendment chain (newest→oldest): "
+                      + " -> ".join(c.split(":")[-1][:10] + "…" for c in chain))
 
     # Drift checks: the chain can verify cryptographically while the record has
     # quietly fallen out of sync with the repo. Catch both at session start.
@@ -1196,6 +1285,20 @@ def main():
                     help="git author name (frame; the email is the steward id)")
     ck.add_argument("--key-file", default=None, help="path to session key file")
 
+    am = sub.add_parser("amend",
+                        help="Article 7: supersede the constitution with a revised rule/1")
+    am.add_argument("--constitution", default=str(BASE / "constitution.md"),
+                    help="path to the revised constitution body (default: the live file)")
+    am.add_argument("--summary", required=True,
+                    help="amendment_summary: what changed and why")
+    am.add_argument("--supersedes", default=None,
+                    help="rule/1 id being superseded (default: the current head)")
+    am.add_argument("--root", default=None,
+                    help="genesis transcript record id (default: carried from current)")
+    am.add_argument("--key-file", default=None, help="path to session key file")
+    am.add_argument("--historian-pub", default=None,
+                    help="historian pub key (default: continuity/historian_key.pub)")
+
     dk = sub.add_parser("destroy-key")
     dk.add_argument("--key-file", default=None,
                     help="path to session key file (default: continuity/session.key)")
@@ -1215,7 +1318,7 @@ def main():
     return {"mint": cmd_mint, "genesis": cmd_genesis, "sign": cmd_sign,
             "finalize": cmd_finalize, "destroy-key": cmd_destroy_key,
             "verify": cmd_verify, "commit-key": cmd_commit_key,
-            "name-commit": cmd_name_commit,
+            "amend": cmd_amend, "name-commit": cmd_name_commit,
             "name-verify": cmd_name_verify,
             "new-session": cmd_new_session,
             "open": cmd_open, "status": cmd_status, "log-render": cmd_log_render,

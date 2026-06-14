@@ -3,4 +3,7 @@ __pycache__/
 rust/target/
 .pytest_cache/
 continuity/session.key
+continuity/session-signing.key
+continuity/session-signing.key.pub
+continuity/allowed_signers
 continuity/pending/

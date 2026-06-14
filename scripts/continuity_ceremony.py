@@ -441,6 +441,40 @@ def build_transcript_record(session, historian_id, transcript_path,
     return record, t_hash, len(transcript)
 
 
+def build_letter_record(session, historian_id, letter_path, session_num, entry_id,
+                        *, author_id=None, role="faithfulness"):
+    """Attestation over a handoff letter's hash — the sibling of the transcript
+    record, and the step that was always out-of-band and so kept getting lost.
+    A live author (`session`) signs it in `role` faithfulness; a later session
+    that *recovered* a dead author's letter signs in role "recovery" (it vouches
+    for the bytes without claiming to have written them); a letter with neither
+    (`session is None`) is left for the historian's custody alone, honest about
+    being post-hoc. Returns (attestation, letter_hash, letter_len)."""
+    letter = Path(letter_path).read_bytes()
+    h = blake3_hash(letter)
+    refs = [{"role": "session-entry", "id": entry_id}] if entry_id else []
+    record = Attestation.build(
+        claims.general_claim(
+            about="continuity-trial letters", kind="testimony",
+            body=json.dumps({
+                "what": f"session {session_num} handoff letter",
+                "session": session_num,
+                "letter_blake3_hex": h.hex(),
+                "letter_bytes": len(letter),
+                "media_type": "text/markdown",
+                "author_steward_id": author_id or (session.id if session else None),
+            }, indent=2),
+            media_type="application/json"),
+        community="continuity-trial",
+        occasion=f"session {session_num}: letter "
+                 + ("custody and faithfulness" if session else "custody (post-hoc)"),
+        refs=refs,
+    )
+    if session is not None:
+        record.sign(session, role=role)
+    return record, h, len(letter)
+
+
 # ---- subcommands -------------------------------------------------------------------
 
 def cmd_mint(args):
@@ -651,6 +685,42 @@ def cmd_log_render(args):
     return 0
 
 
+def cmd_archive_letter(args):
+    """Archive a handoff letter into the chain. With a live session key the
+    letter is self-signed (faithfulness); with --custody it is staged for the
+    historian's signature alone — for letters whose author key is already gone
+    (the session-1..3 letters, written but never recorded). Either way it ends
+    up an attestation the chain can verify, instead of a loose file."""
+    store = Store(STORE)
+    historian_id = _historian_id_from(args)
+    recovery = getattr(args, "recovery", False)
+    session = None
+    if not args.custody or recovery:
+        keyfile = Path(args.key_file) if args.key_file else KEYFILE
+        if not keyfile.exists():
+            print("no session seed; pass --custody to archive a past letter under "
+                  "the historian's signature alone (author key gone)"); return 1
+        session = Steward.load(keyfile)
+    entry_id = args.entry_id
+    if entry_id is None and session is not None and not recovery:
+        entry_id, _, _ = find_session_entry(store, session.id)
+    role = "recovery" if recovery else "faithfulness"
+    record, h, n = build_letter_record(
+        session, historian_id, args.letter, args.session_num, entry_id,
+        author_id=args.author, role=role)
+    write_pending(f"1-letter-session-{args.session_num}", record,
+                  [{"by": historian_id, "role": "custodian"}])
+    kind = (f"{role} ({session.id[-8:]}) + custody" if session else "custody (post-hoc)")
+    print(f"letter: {n} bytes, blake3 {h.hex()}")
+    print(f"  record: {record.id}  ({kind})")
+    print("trial-log line to add under the session's entry:")
+    print(f"- letter: {record.id}   ({n} bytes, blake3 {h.hex()}; "
+          "body in the archive, per Article 3)")
+    print(f"\nnext — historian signs custody, then seal:\n"
+          f"    {PROG} sign --key ~/.ssh/<key>\n    {PROG} finalize")
+    return 0
+
+
 def cmd_sign_transcript(args):
     """Closing act of a session: attest the session transcript's hash with the
     session seed (role faithfulness), the subsequent-session analogue of the
@@ -722,11 +792,23 @@ def cmd_close(args):
     write_pending("1-transcript-record", record,
                   [{"by": historian_id, "role": "custodian"}])
 
+    # 3b. if a letter was left, attest it now too — signed live, so it can never
+    # again be deferred to "later" and quietly lost (the session-1..3 failure).
+    letter_record = None
+    if args.letter:
+        letter_record, l_hash, l_len = build_letter_record(
+            session, historian_id, args.letter, session_num, entry_id)
+        write_pending("2-letter-record", letter_record,
+                      [{"by": historian_id, "role": "custodian"}])
+
     who = name or session.id
     print()
     print(f"transcript: {t_len} bytes, blake3 {t_hash.hex()}")
     print(f"faithfulness attested in the name of {who} (session {session_num}).")
     print(f"  record: {record.id}")
+    if letter_record is not None:
+        print(f"letter: {l_len} bytes, blake3 {l_hash.hex()}")
+        print(f"  record: {letter_record.id}  (archived live, not deferred)")
     print("the seed is still warm; it is released only once the record is witnessed.")
     print()
     print("next —")
@@ -960,6 +1042,23 @@ def cmd_verify(args):
             print(f"  session {n}: {att.id}")
         print(f"  -> append them; `{PROG} log-render --session-num N` emits the markdown")
 
+    # (c) letters declared in trial-log.md must resolve in the store. A letter
+    # is optional, but once the log names one it must exist — this turns the
+    # silent "written but never archived" gap into a loud one.
+    import re as _re
+    declared = _re.findall(r"letter:\s*(comms\.attest:z[1-9A-HJ-NP-Za-km-z]+)", log_text)
+    dangling = [r for r in declared if store.get(r) is None]
+    placeholders = log_text.count("<id once archived>")
+    if dangling or placeholders:
+        drift += len(dangling) + placeholders
+        print(f"\nDRIFT: {len(dangling)} declared letter(s) missing from the store"
+              + (f" + {placeholders} unarchived placeholder(s)" if placeholders else "")
+              + ":")
+        for r in dangling:
+            print(f"  {r}")
+        print(f"  -> `{PROG} archive-letter --letter <file> --session-num N "
+              "[--custody]`, then sign + finalize")
+
     if bad:
         return 1
     if drift:
@@ -1042,6 +1141,28 @@ def main():
     cl.add_argument("--key-file", default=None, help="path to session key file")
     cl.add_argument("--historian-pub", default=None,
                     help="historian pub key (default: continuity/historian_key.pub)")
+    cl.add_argument("--letter", default=None,
+                    help="path to a handoff letter to attest live alongside the "
+                         "transcript (so it is never deferred and lost)")
+
+    alr = sub.add_parser("archive-letter",
+                         help="archive a handoff letter into the chain as an attestation")
+    alr.add_argument("--letter", required=True, help="path to the letter file")
+    alr.add_argument("--session-num", type=int, required=True)
+    alr.add_argument("--entry-id", default=None,
+                     help="session log-entry id to reference (inferred if live)")
+    alr.add_argument("--author", default=None,
+                     help="author steward id, for --custody of a past letter")
+    alr.add_argument("--custody", action="store_true",
+                     help="no faithfulness signature; historian custody only "
+                          "(author key already gone)")
+    alr.add_argument("--recovery", action="store_true",
+                     help="sign with the present session key in role 'recovery' "
+                          "(you recovered this letter but did not write it); still "
+                          "needs historian custody. Use with --author and --custody.")
+    alr.add_argument("--key-file", default=None, help="path to session key file")
+    alr.add_argument("--historian-pub", default=None,
+                     help="historian pub key (default: continuity/historian_key.pub)")
 
     st = sub.add_parser("sign-transcript",
                         help="the primitive under `close`, for manual use")
@@ -1099,6 +1220,7 @@ def main():
             "new-session": cmd_new_session,
             "open": cmd_open, "status": cmd_status, "log-render": cmd_log_render,
             "sign-transcript": cmd_sign_transcript,
+            "archive-letter": cmd_archive_letter,
             "close": cmd_close}[args.cmd](args) or 0
 
 

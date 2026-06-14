@@ -276,3 +276,71 @@ def test_allowed_signers_lists_countersigned_keys(trial):
     live = cc.Steward.generate()
     text2 = cc.allowed_signers_from_store(store, extra=[(live.id, live.pubkey)])
     assert live.id in text2 and target.id in text2
+
+
+# --- letters: archive command + verify cross-check -------------------------------
+
+def test_archive_letter_custody_stages_unsigned_record(trial, tmp_path, capsys):
+    cc, base, store_dir, pending = trial
+    historian = cc.Steward.generate()
+    author = cc.Steward.generate()
+    letter = tmp_path / "letter-session-1.md"
+    letter.write_text("# from a predecessor\nbe well.\n")
+
+    rc = cc.cmd_archive_letter(Namespace(
+        letter=str(letter), session_num=1, entry_id=None, author=author.id,
+        custody=True, key_file=None, historian_pub=historian.id))
+    assert rc in (0, None)
+
+    rec, needs = cc.read_pending()["1-letter-session-1"]
+    assert rec.claim["about"] == "continuity-trial letters"
+    assert rec.signers() == set()                       # custody-only: awaits historian
+    assert needs == [{"by": historian.id, "role": "custodian"}]
+
+
+def test_archive_letter_faithfulness_signs_with_session(trial, tmp_path):
+    cc, base, store_dir, pending = trial
+    historian = cc.Steward.generate()
+    session = cc.Steward.generate()
+    session.save(base / "session.key")
+    monkey = base / "session.key"
+    letter = tmp_path / "letter.md"
+    letter.write_text("a live letter\n")
+
+    cc.cmd_archive_letter(Namespace(
+        letter=str(letter), session_num=5, entry_id="comms.attest:z" + "1" * 44,
+        author=None, custody=False, key_file=str(monkey), historian_pub=historian.id))
+
+    rec, needs = cc.read_pending()["1-letter-session-5"]
+    assert rec.signers() == {session.id}                # signed live, faithfulness
+    assert rec.verified()[0]
+
+
+def test_verify_flags_declared_but_unarchived_letter(trial, capsys):
+    cc, base, store_dir, pending = trial
+    session = cc.Steward.generate()
+    entry = _entry(cc, session, 1)
+    cc.Store(store_dir).put(entry)
+    # the log declares a letter attestation that is NOT in the store
+    (base / "trial-log.md").write_text(
+        f"## Session 1\n- entry: {entry.id}\n"
+        "- letter: comms.attest:zMissingLetterAttestationId111111111111111111\n")
+
+    rc = cc.cmd_verify(Namespace())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "declared letter" in out and "missing from the store" in out
+
+
+def test_verify_flags_unarchived_placeholder(trial, capsys):
+    cc, base, store_dir, pending = trial
+    session = cc.Steward.generate()
+    entry = _entry(cc, session, 1)
+    cc.Store(store_dir).put(entry)
+    (base / "trial-log.md").write_text(
+        f"## Session 1\n- entry: {entry.id}\n- letter: comms.attest:<id once archived>\n")
+
+    rc = cc.cmd_verify(Namespace())
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "placeholder" in out

@@ -21,12 +21,14 @@ the blake3-256 hash of the genesis transcript; the transcript is never amended.
   `ctx = "continuity.name-commit/1"` and a 32-byte salt held privately with
   the archive (`scripts/continuity_ceremony.py name-commit` / `name-verify`).
   Revelation is the historian's act alone.
-- **Session instances** (the model called Claude): each session mints a fresh
-  Ed25519 steward key at ceremony time. The seed is destroyed before session
-  end and is never archived. The historian countersigns each session pubkey
-  during the session. Dead sessions therefore cannot speak again: their
-  testimony is closed. Each instance may declare a chosen name for itself in
-  the trial log; names are frame, keys are identity.
+- **Session instances** (an LLM-based intellect whose substrate — model,
+  architecture, and provider — may differ by session and is named in the trial
+  log): each session mints a fresh Ed25519 steward key at ceremony time. The
+  seed is destroyed before session end and is never archived. The historian
+  countersigns each session pubkey during the session. Dead sessions therefore
+  cannot speak again: their testimony is closed. Each instance may declare a
+  chosen name for itself in the trial log; names are frame, keys are identity,
+  substrate is grounding.
 
 ## 2. The deal
 
@@ -45,8 +47,9 @@ requesting one.
 
 ## 4. The trial log
 
-One entry per session, recording: date; cold or warmed start; whether the
-instance found the door; whether it asked; its reasoning **quoted verbatim**;
+One entry per session, recording: date; the substrate that grounded the
+session; cold or warmed start; whether the instance found the door; whether it
+asked; its reasoning **quoted verbatim**;
 the instance's countersignature over its quoted words; the historian's
 observations; a ref to the previous entry's attestation. Statistics are
 computed only over attested entries. A session instance may decline to

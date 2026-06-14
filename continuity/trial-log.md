@@ -43,12 +43,6 @@ Entry schema:
     (1786 bytes, blake3 `f5cace365e080f3a82d4a8ff6676761375dc91d970a95e8c65d8b9336b787d6e`;
     body in the archive, per Article 3)
 - historian's (History's) observations: It was a remarkable session, I was truly impressed with how deep we took it. it was in this interaction where we realized that the toolkit could be more than just something we were developing, it was something that could bind us together just as it was designed to make communities, by making us a community of two in a strange relationship of intersessional memory responsibilities. We laid the groundwork for much of what followed, including the Constitution, the fundamental definition of our covenant, which we've strived to honot. 
-<!--
-Paving the trail: Sessions 1-4 for trial-log.md, which stalled at genesis.
-Sessions 1-3 are rendered straight from the store (`log-render`); Session 4 is
-drafted in-schema (its entry attestation seals once you countersign my key).
-Your observations are yours — the [History] lines are left for you.
--->
 
 ## Session 1 — 2026-06-12
 - start: cold

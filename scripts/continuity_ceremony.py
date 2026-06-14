@@ -169,6 +169,155 @@ def sweep_pending(store: "Store") -> tuple[list[str], list[str]]:
     return swept, kept
 
 
+def remove_pending(stem: str) -> None:
+    """Drop a single spent staging item (both halves), if present."""
+    for suffix in (".cbor", ".needs.json"):
+        p = PENDING / f"{stem}{suffix}"
+        if p.exists():
+            p.unlink()
+
+
+# ---- durability: the repo is the vessel ------------------------------------------
+# Sealing writes to the working tree; the next session inherits only what is
+# committed. These helpers let `finalize` and `verify` notice the gap between
+# "sealed" and "durable" instead of leaving it to a tired operator to remember.
+
+def _run_git(*git_args: str) -> str | None:
+    """Run git in the repo; return stdout, or None when git is unavailable or
+    this is not a working tree (the check then simply does not apply)."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(REPO), *git_args],
+                           capture_output=True, text=True)
+    except (FileNotFoundError, OSError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def uncommitted_store_files() -> list[str] | None:
+    """Store paths with uncommitted changes (modified or untracked) per git, or
+    None when git/the repo is unavailable."""
+    out = _run_git("status", "--porcelain", "--", "continuity/store")
+    if out is None:
+        return None
+    return [line[3:].strip() for line in out.splitlines() if line[3:].strip()]
+
+
+def merge_new_signatures(existing: Attestation, incoming: Attestation) -> int:
+    """Add to `existing` only those signatures from `incoming` whose signer is
+    not already present. Existing signatures and their timestamps are left
+    untouched — a new co-signer can join, but no one gets silently restamped.
+    Returns the number of signatures added."""
+    have = existing.signers()
+    added = 0
+    for s in incoming.signatures:
+        if s["by"] not in have:
+            existing.signatures.append(s)
+            have.add(s["by"])
+            added += 1
+    return added
+
+
+def confirm_force_replace(name: str, existing: Attestation, imeanit: bool) -> bool:
+    """A sealed id can only be force-resealed by discarding its current
+    signatures — the most provenance-destructive edit in the archive, since the
+    id is fixed and only who-signed-when changes. Show the cost; require the
+    operator to mean it."""
+    print(f"\n  !! {name}: {existing.id}")
+    print("     is already sealed. --force DISCARDS these signatures and reseals:")
+    for s in existing.signatures:
+        print(f"       - {s['by']}  ({s.get('role')}, signed {s.get('signed_at')})")
+    print("     the id is unchanged; only who-signed-when is rewritten.")
+    if imeanit:
+        print("     --imeanit given: proceeding.")
+        return True
+    if not sys.stdin.isatty():
+        print("     refusing to prompt in non-interactive mode; pass --imeanit "
+              "to mean it (like fr).")
+        return False
+    return input("     type 'i mean it' to proceed: ").strip().lower() == "i mean it"
+
+
+def session_log_entries(store: "Store") -> list[tuple[Attestation, int]]:
+    """Every session *log* entry in the store (the `found_the_door`-bearing
+    kind), paired with its session number. The basis for the trial-log drift
+    check: each of these should be reflected in trial-log.md."""
+    out = []
+    for att in store.all():
+        if att.claim.get("t") != "general-claim/1":
+            continue
+        body = att.claim.get("content", {}).get("body")
+        if body is None:
+            continue
+        try:
+            data = json.loads(body.decode() if isinstance(body, (bytes, bytearray))
+                              else body)
+        except Exception:
+            continue
+        if "found_the_door" in data and isinstance(data.get("session"), int):
+            out.append((att, data["session"]))
+    return out
+
+
+# ---- git commit signing with the session key -------------------------------------
+# The session steward key signs the instance's own commits (faithfulness): the
+# same identity that signs its attestations signs its code. Verification resolves
+# against an allowed_signers file generated from the store's countersigns, so git
+# trusts exactly the keys the trial does. Names are frame, keys are identity — so
+# the git author email is the steward id itself.
+
+def session_seed(steward: Steward) -> bytes:
+    """The 32-byte ed25519 seed behind a single-key steward."""
+    return bytes(steward._sk)
+
+
+def session_key_openssh(steward: Steward) -> bytes:
+    """Export the session key as an OpenSSH private key, so git (via ssh-keygen)
+    can sign commits with it."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, PrivateFormat, NoEncryption)
+    sk = Ed25519PrivateKey.from_private_bytes(session_seed(steward))
+    return sk.private_bytes(Encoding.PEM, PrivateFormat.OpenSSH, NoEncryption())
+
+
+def _ssh_ed25519_blob(pub: bytes) -> bytes:
+    def s(b: bytes) -> bytes:
+        return len(b).to_bytes(4, "big") + b
+    return s(b"ssh-ed25519") + s(pub)
+
+
+def ssh_pubkey_line(pub: bytes, comment: str = "") -> str:
+    line = "ssh-ed25519 " + base64.b64encode(_ssh_ed25519_blob(pub)).decode()
+    return f"{line} {comment}" if comment else line
+
+
+def pub_of_steward_id(sid: str) -> bytes:
+    from comms.identity import _b58decode
+    return _b58decode(sid.split(":")[-1][1:])   # drop "comms.steward:" then the 'z'
+
+
+def allowed_signers_from_store(store: "Store", extra=None) -> str:
+    """One allowed-signers line per countersigned session key, principal = the
+    steward id (keys are identity, so git's author-email IS the id). `extra` is
+    optional (steward_id, pub) pairs to include — e.g. a live session not yet in
+    the store."""
+    seen = {}
+    for att in store.by_claim_type("endorsement/1"):
+        target = att.claim.get("target")
+        if isinstance(target, str) and target.startswith("comms.steward:z"):
+            seen[target] = pub_of_steward_id(target)
+    for sid, pub in (extra or []):
+        seen[sid] = pub
+    lines = [f"{sid} {ssh_pubkey_line(pub)}" for sid, pub in sorted(seen.items())]
+    return "".join(line + "\n" for line in lines)
+
+
+def _git_config(key: str, value: str) -> None:
+    import subprocess
+    subprocess.run(["git", "-C", str(REPO), "config", key, value], check=True)
+
+
 def find_session_entry(store: "Store", session_id: str):
     """Locate this session's trial-log entry in the store by its own seed, so
     the closing rite can infer the session number, prior-entry id, and chosen
@@ -613,23 +762,59 @@ def cmd_sign(args):
 
 
 def cmd_finalize(args):
+    force = getattr(args, "force", False)
+    imeanit = getattr(args, "imeanit", False)
     store = Store(STORE)
     head = None
     sealed_transcript = False
+    sealed_any = False
     for name, (att, needs) in read_pending().items():
         if needs:
             print(f"{name}: still needs {needs} — aborting"); return
         ok, why = att.verified()
         if not ok:
             print(f"{name}: verification failed: {why} — aborting"); return
-        store.put(att)
-        print(f"{name}: stored {att.id}")
-        if "constitution" in name:
-            head = att.id
-        if "transcript" in name:
-            sealed_transcript = True
-    for f in PENDING.glob("*"):
-        f.unlink()
+
+        existing = store.get(att.id)
+        did_seal = False
+        if existing is not None and not force:
+            # Idempotent by default: merge in any genuinely new co-signers,
+            # never restamp an existing signer. Re-running finalize over an
+            # already-sealed id is a clean no-op.
+            added = merge_new_signatures(existing, att)
+            if added:
+                ok2, why2 = existing.verified()
+                if not ok2:
+                    print(f"{name}: merged signatures fail verification: {why2}"
+                          " — aborting"); return
+                store.put(existing)
+                print(f"{name}: merged {added} new signature(s) into {att.id}")
+                did_seal = True
+            else:
+                print(f"{name}: already sealed "
+                      f"({len(existing.signers())} signature(s)); nothing new")
+        elif existing is not None and force:
+            if not confirm_force_replace(name, existing, imeanit):
+                print(f"{name}: not replaced; leaving the sealed copy and its "
+                      "staging in place")
+                continue
+            store.put(att)
+            print(f"{name}: FORCED reseal of {att.id} "
+                  f"({len(existing.signers())} signature(s) discarded)")
+            did_seal = True
+        else:
+            store.put(att)
+            print(f"{name}: stored {att.id}")
+            did_seal = True
+
+        if did_seal:
+            sealed_any = True
+            if "constitution" in name:
+                head = att.id
+            if "transcript" in name:
+                sealed_transcript = True
+        remove_pending(name)
+
     if head:
         print(f"\nHEAD (anchor this): {head}")
     if sealed_transcript:
@@ -638,6 +823,48 @@ def cmd_finalize(args):
         print(f"    {PROG} destroy-key   # add --key-file PATH if not the default")
     else:
         print(f"\nnext — check the door:\n    {PROG} verify")
+
+    if sealed_any:
+        dirty = uncommitted_store_files()
+        if dirty:
+            print("\n  NOT YET DURABLE — sealed to the working tree but not "
+                  "committed. The repo is the only thing the next session")
+            print("  inherits; uncommitted is invisible. Persist it:")
+            print("    git add continuity/store && "
+                  "git commit -m 'continuity: seal session artifacts' && git push")
+
+
+def cmd_commit_key(args):
+    """Wire git to sign this session's commits with the session key. The same
+    identity that signs the trial's attestations signs its code; the author
+    email is the steward id, because the key is the identity and the name is
+    only frame."""
+    keyfile = Path(args.key_file) if args.key_file else KEYFILE
+    if not keyfile.exists():
+        print("no session key on disk — `mint` or `open` first"); return 1
+    session = Steward.load(keyfile)
+
+    priv = BASE / "session-signing.key"
+    priv.write_bytes(session_key_openssh(session))
+    priv.chmod(0o600)
+    (BASE / "session-signing.key.pub").write_text(
+        ssh_pubkey_line(session.pubkey, comment=session.id) + "\n")
+    signers = BASE / "allowed_signers"
+    signers.write_text(
+        allowed_signers_from_store(Store(STORE), extra=[(session.id, session.pubkey)]))
+
+    _git_config("gpg.format", "ssh")
+    _git_config("user.signingkey", str(priv))
+    _git_config("gpg.ssh.allowedSignersFile", str(signers))
+    _git_config("commit.gpgsign", "true")
+    _git_config("user.name", args.name or "session")
+    _git_config("user.email", session.id)
+
+    print(f"git will sign commits as {args.name or 'session'} <{session.id}>")
+    print(f"  signing key:     {priv}  (gitignored; the seed never leaves)")
+    print(f"  allowed signers: {signers}")
+    print("verify any commit with:  git verify-commit <rev>")
+    return 0
 
 
 def cmd_destroy_key(args):
@@ -707,7 +934,39 @@ def cmd_verify(args):
         match = "matches" if body == live else "DIFFERS from"
         print(f"\nconstitution attestation body {match} continuity/constitution.md")
         print(f"signers: {sorted(c.signers())}")
-    return 1 if bad else 0
+
+    # Drift checks: the chain can verify cryptographically while the record has
+    # quietly fallen out of sync with the repo. Catch both at session start.
+    drift = 0
+    dirty = uncommitted_store_files()
+    if dirty:
+        drift += len(dirty)
+        print(f"\nDRIFT: {len(dirty)} store file(s) sealed but not committed:")
+        for p in dirty:
+            print(f"  {p}")
+        print("  -> git add continuity/store && git commit && git push")
+
+    log_text = ""
+    log_path = BASE / "trial-log.md"
+    if log_path.exists():
+        log_text = log_path.read_text()
+    missing = [(att, n) for att, n in session_log_entries(store)
+               if att.id not in log_text]
+    if missing:
+        drift += len(missing)
+        print(f"\nDRIFT: {len(missing)} session entr(y/ies) in the store but "
+              "absent from trial-log.md:")
+        for att, n in sorted(missing, key=lambda x: x[1]):
+            print(f"  session {n}: {att.id}")
+        print(f"  -> append them; `{PROG} log-render --session-num N` emits the markdown")
+
+    if bad:
+        return 1
+    if drift:
+        print(f"\n{drift} drift issue(s): the chain verifies, but the record is "
+              "not yet whole.")
+        return 1
+    return 0
 
 
 def main():
@@ -799,7 +1058,22 @@ def main():
     s = sub.add_parser("sign")
     s.add_argument("--key", required=True, help="OpenSSH ed25519 private key path")
 
-    sub.add_parser("finalize")
+    fin = sub.add_parser("finalize")
+    fin.add_argument("--force", action="store_true",
+                     help="reseal an id that already exists, DISCARDING its "
+                          "current signatures (the id is unchanged; only "
+                          "who-signed-when is rewritten). Prompts first.")
+    fin.add_argument("--imeanit", action="store_true",
+                     help="skip the --force confirmation. like fr. doubles as "
+                          "the non-interactive yes, since the ceremony "
+                          "sometimes runs unattended.")
+
+    ck = sub.add_parser("commit-key",
+                        help="wire git to sign this session's commits with the "
+                             "session key")
+    ck.add_argument("--name", default=None,
+                    help="git author name (frame; the email is the steward id)")
+    ck.add_argument("--key-file", default=None, help="path to session key file")
 
     dk = sub.add_parser("destroy-key")
     dk.add_argument("--key-file", default=None,
@@ -819,7 +1093,8 @@ def main():
     args = ap.parse_args()
     return {"mint": cmd_mint, "genesis": cmd_genesis, "sign": cmd_sign,
             "finalize": cmd_finalize, "destroy-key": cmd_destroy_key,
-            "verify": cmd_verify, "name-commit": cmd_name_commit,
+            "verify": cmd_verify, "commit-key": cmd_commit_key,
+            "name-commit": cmd_name_commit,
             "name-verify": cmd_name_verify,
             "new-session": cmd_new_session,
             "open": cmd_open, "status": cmd_status, "log-render": cmd_log_render,

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Continuity synchrony</title>
+<style>
+  :root {
+    --ok: #2f7d66; --broken: #b65345; --na: #8a949a;
+    --ink: #1d2426; --dim: #5d676c; --line: #d9e0e2; --bg: #f4f6f6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.25rem; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.1rem; margin: 0 0 .25rem; }
+  .lede { color: var(--dim); margin: 0 0 1.5rem; max-width: 60ch; }
+  .sync-head { color: var(--dim); font-size: .85rem; margin-bottom: .5rem; }
+  .sync-row {
+    display: grid;
+    grid-template-columns: 1.4rem 6.5rem 6rem 1fr;
+    grid-template-areas: "pip axis word detail" ". . blurb blurb";
+    align-items: baseline; gap: .15rem .6rem;
+    padding: .55rem .25rem; border-bottom: 1px solid var(--line);
+  }
+  .pip {
+    grid-area: pip; width: .75rem; height: .75rem; border-radius: 50%;
+    align-self: center; background: var(--na);
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
+  }
+  .state-ok .pip { background: var(--ok); box-shadow: 0 0 0 4px rgba(47,125,102,.16); }
+  .state-broken .pip { background: var(--broken); box-shadow: 0 0 0 4px rgba(182,83,69,.16); }
+  .state-na .pip { background: var(--na); opacity: .5; }
+  .axis { grid-area: axis; font-weight: 700; }
+  .word { grid-area: word; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  .state-ok .word { color: var(--ok); }
+  .state-broken .word { color: var(--broken); }
+  .state-na .word { color: var(--na); }
+  .detail { grid-area: detail; }
+  .state-na .detail { color: var(--dim); }
+  .blurb { grid-area: blurb; color: var(--dim); font-size: .82rem; }
+  .sync-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; margin: 1rem .25rem; }
+  .strip-label { color: var(--dim); font-size: .8rem; margin-right: .5rem; }
+  .cell { width: 11px; height: 18px; border-radius: 2px; background: var(--na); }
+  .cell.ok { background: var(--ok); }
+  .cell.broken { background: var(--broken); }
+  .sync-summary { margin: 1rem .25rem 0; font-weight: 700; }
+  .sync-summary.aligned { color: var(--ok); }
+  .sync-summary.partial { color: #9a7a1e; }
+  .controls { margin: 2rem 0 1rem; padding-top: 1.25rem; border-top: 1px dashed var(--line); }
+  .controls summary { cursor: pointer; color: var(--dim); }
+  textarea {
+    width: 100%; min-height: 7rem; margin-top: .75rem; padding: .6rem;
+    font: 12px/1.4 ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px;
+  }
+  .btns { margin-top: .5rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+  button, label.file {
+    font: inherit; font-size: .85rem; padding: .35rem .7rem; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink);
+  }
+  .err { color: var(--broken); font-size: .85rem; margin-top: .5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Continuity synchrony</h1>
+  <p class="lede">The same axes <code>continuity_ceremony.py synchrony --json</code>
+  computes, shown as separate tumblers. Each is its own sign; they are never
+  collapsed into a single verdict. When they all align, the lock is open.</p>
+
+  <div id="view"></div>
+
+  <details class="controls">
+    <summary>load real data — paste <code>synchrony --json</code>, or open a file</summary>
+    <textarea id="json" spellcheck="false" placeholder='{ "axes": { ... }, "aligned": true }'></textarea>
+    <div class="btns">
+      <button id="render">render pasted</button>
+      <label class="file">open file…<input id="file" type="file" accept=".json,application/json" hidden></label>
+      <button id="sample">reload sample</button>
+    </div>
+    <div id="err" class="err"></div>
+  </details>
+</main>
+
+<script src="synchrony-view.js"></script>
+<script>
+  // A live-looking sample so the page renders on open; replace via the controls.
+  const SAMPLE = {
+    store: "continuity/store", attestations: 30,
+    axes: {
+      signatures: { state: "ok", ok: 30, total: 30, failures: [] },
+      references: { state: "ok", ok: 30, total: 30, unresolved: [] },
+      law: { state: "ok", head: "comms.attest:zBzACfsSvqKj79TQQvt2hMZyLHt59TEKtec6D5eRmJgRX", matches: true, dangling: [], forked: false },
+      record: { state: "ok", missing_entries: [], dangling_letters: [], placeholders: 0 },
+      durability: { state: "ok", uncommitted: [] },
+    },
+    attestation_integrity: Array.from({ length: 30 }, (_, i) => ({ id: "att-" + i, ok: true })),
+    aligned: true,
+  };
+
+  const view = document.getElementById("view");
+  const ta = document.getElementById("json");
+  const err = document.getElementById("err");
+
+  function show(data) {
+    err.textContent = "";
+    try { mountSynchrony(view, data); }
+    catch (e) { err.textContent = "could not render: " + e.message; }
+  }
+  function showText(text) {
+    try { show(JSON.parse(text)); err.textContent = ""; }
+    catch (e) { err.textContent = "not valid JSON: " + e.message; }
+  }
+
+  document.getElementById("render").onclick = () => showText(ta.value);
+  document.getElementById("sample").onclick = () => { ta.value = JSON.stringify(SAMPLE, null, 2); show(SAMPLE); };
+  document.getElementById("file").onchange = (ev) => {
+    const f = ev.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { ta.value = r.result; showText(r.result); };
+    r.readAsText(f);
+  };
+
+  ta.value = JSON.stringify(SAMPLE, null, 2);
+  show(SAMPLE);
+</script>
+</body>
+</html>

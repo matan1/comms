@@ -186,7 +186,11 @@ console.log("8. INTERACTIONS: direct edges", overlay.direct.length,
 
 // ---------- 9. Persistent adversary identity ----------
 const marked = injectAdversary("sovereign");
-console.log("9. ADVERSARY LABEL:", marked.adversaryType === "sovereign" ? "PASS" : "FAIL",
+const originBanner = adversaryOrigin(marked);
+const originVisible = originBanner.includes("Adversary origin · sovereign")
+  && originBanner.includes(adversaryDescriptions.sovereign);
+console.log("9. ADVERSARY LABEL:",
+  marked.adversaryType === "sovereign" && originVisible ? "PASS" : "FAIL",
   `(${marked.label} · ${marked.adversaryType})`);
 
 // ---------- 10. Timing ----------

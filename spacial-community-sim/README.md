@@ -143,9 +143,10 @@ that actually informed their own direct decisions.
 
 Injected adversaries retain their preset type. Omniscient view gives each of
 the 16 types a stable default color and persistent `name · type` label so their
-survival, expulsion, and accumulation are visually traceable. Selecting a
-villager hides those labels and colors because that ground truth is not part of
-the villager's evidence.
+survival, expulsion, and accumulation are visually traceable. Selecting one
+hides the map label and color because that ground truth is not part of the
+villager's evidence-relative view, but the inspector prominently preserves its
+simulator-level adversary origin and description beneath the villager's name.
 
 Run the full comparison (25 deterministic seeds per preset, 120 days):
 

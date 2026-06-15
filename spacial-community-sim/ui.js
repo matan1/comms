@@ -82,6 +82,15 @@ function viewpoint() {
   return selectedId ? state.byId.get(selectedId) : null;
 }
 
+function adversaryOrigin(v) {
+  if (!v.adversaryType) return "";
+  return `
+    <div class="inspector-origin" style="--origin-color:${adversaryColors[v.adversaryType]}">
+      <strong>Adversary origin · ${v.adversaryType}</strong>
+      <span>${adversaryDescriptions[v.adversaryType]}</span>
+    </div>`;
+}
+
 // --- Frame loop ----------------------------------------------------------------------
 
 function phaseDuration(speed) {
@@ -197,6 +206,7 @@ function renderInspector() {
     <button type="button" class="inspector-close" aria-label="Return to omniscient view">&times;</button>
     <div class="inspector-head">
       <strong>${v.label}</strong>
+      ${adversaryOrigin(v)}
       <span>${v.member ? (v.farmstead ? "farmstead member" : "village member") : "newcomer"} · ${v.specialty.id}</span>
     </div>
     <dl class="inspector-stats">

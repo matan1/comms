@@ -830,6 +830,7 @@ function buildInteractionOverlay(viewer, p) {
       seenDirect.add(key);
       direct.push({
         from, to, kind: interaction.kind, outcome: interaction.outcome,
+        directional: interaction.kind !== "gossip",
         lane: direct.length % 5 - 2
       });
     }
@@ -851,6 +852,7 @@ function buildInteractionOverlay(viewer, p) {
         to: att.target,
         class: evidenceClass(att),
         depth: 1,
+        directional: true,
         counted: p.vouchMode
           ? ["deal-record/1", "objection/1"].includes(att.type)
           : ["deal-record/1", "endorsement/1", "objection/1", "ceremony-record/1"].includes(att.type),

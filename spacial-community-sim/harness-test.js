@@ -157,13 +157,22 @@ assignTargets(normalizeParams({}));
 const homeStable = dist(homeBefore, resident.target) < 1e-9;
 resident.target = { x: resident.pos.x + 0.5, y: resident.pos.y };
 prepareJourneys(0.5);
-moveVillagers(0.41);
-moveVillagers(0.01);
+moveVillagers(phaseTiming(0.5).travel);
 const arrivedOnBudget = dist(resident.pos, resident.target) < 1e-9;
 console.log("6. MOVEMENT: idle home stable:", homeStable ? "PASS" : "FAIL",
   "| phase-budgeted arrival:", arrivedOnBudget ? "PASS" : "FAIL");
 
-// ---------- 7. Interaction overlay ----------
+// ---------- 7. Interaction reveal timing ----------
+const timing = phaseTiming(2);
+const hiddenInTransit = interactionRevealProgress(timing.travel * 0.5, 2) === null;
+const visibleAfterArrival = interactionRevealProgress(
+  (timing.revealStart + timing.revealEnd) / 2, 2
+) !== null;
+const hiddenBeforeDeparture = interactionRevealProgress(1.95, 2) === null;
+console.log("7. REVEAL TIMING:",
+  hiddenInTransit && visibleAfterArrival && hiddenBeforeDeparture ? "PASS" : "FAIL");
+
+// ---------- 8. Interaction overlay ----------
 const pOverlay = normalizeParams({ vouchMode: true });
 seedState(pOverlay);
 nextPhase(pOverlay);
@@ -171,16 +180,16 @@ const overlay = buildInteractionOverlay(null, pOverlay);
 const decision = state.interactions.find((x) => x.decisionMaker);
 const viewer = decision ? state.byId.get(decision.decisionMaker) : members()[0];
 const selectedOverlay = buildInteractionOverlay(viewer, pOverlay);
-console.log("7. INTERACTIONS: direct edges", overlay.direct.length,
+console.log("8. INTERACTIONS: direct edges", overlay.direct.length,
   "| selected evidence edges", selectedOverlay.evidence.length,
   overlay.direct.length > 0 && selectedOverlay.evidence.length > 0 ? "-> PASS" : "-> FAIL");
 
-// ---------- 8. Persistent adversary identity ----------
+// ---------- 9. Persistent adversary identity ----------
 const marked = injectAdversary("sovereign");
-console.log("8. ADVERSARY LABEL:", marked.adversaryType === "sovereign" ? "PASS" : "FAIL",
+console.log("9. ADVERSARY LABEL:", marked.adversaryType === "sovereign" ? "PASS" : "FAIL",
   `(${marked.label} · ${marked.adversaryType})`);
 
-// ---------- 9. Timing ----------
+// ---------- 10. Timing ----------
 const t0 = Date.now();
 runScenario({}, 200);
-console.log("9. TIMING: 200 days in", Date.now() - t0, "ms");
+console.log("10. TIMING: 200 days in", Date.now() - t0, "ms");

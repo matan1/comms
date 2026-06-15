@@ -301,10 +301,10 @@ function drawVillagers(ctx, w, h) {
   }
 }
 
-function drawCurvedLink(ctx, w, h, edge, color, width, alpha, dashed = false) {
+function curvedLinkGeometry(w, h, edge) {
   const a = state.byId.get(edge.from);
   const b = state.byId.get(edge.to);
-  if (!a || !b) return;
+  if (!a || !b) return null;
   const x1 = a.pos.x * w;
   const y1 = a.pos.y * h;
   const x2 = b.pos.x * w;
@@ -315,19 +315,40 @@ function drawCurvedLink(ctx, w, h, edge, color, width, alpha, dashed = false) {
   const bend = (edge.lane || 0) * Math.min(7, len * 0.045);
   const cx = (x1 + x2) / 2 - (dy / len) * bend;
   const cy = (y1 + y2) / 2 + (dx / len) * bend;
+  return { x1, y1, x2, y2, cx, cy };
+}
+
+function drawCurvedLink(ctx, w, h, edge, color, width, alpha, progress, dashed = false) {
+  const path = curvedLinkGeometry(w, h, edge);
+  if (!path) return;
   ctx.save();
   if (dashed) ctx.setLineDash([4, 5]);
   ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.quadraticCurveTo(cx, cy, x2, y2);
+  ctx.moveTo(path.x1, path.y1);
+  ctx.quadraticCurveTo(path.cx, path.cy, path.x2, path.y2);
   ctx.strokeStyle = hexToRgba(color, alpha);
   ctx.lineWidth = width;
   ctx.stroke();
+
+  if (edge.directional !== false) {
+    const t = progress;
+    const mt = 1 - t;
+    const x = mt * mt * path.x1 + 2 * mt * t * path.cx + t * t * path.x2;
+    const y = mt * mt * path.y1 + 2 * mt * t * path.cy + t * t * path.y2;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(1.8, width * 1.15), 0, Math.PI * 2);
+    ctx.fillStyle = hexToRgba(color, Math.min(1, alpha + 0.25));
+    ctx.fill();
+  }
   ctx.restore();
 }
 
-function drawInteractions(ctx, w, h) {
+function drawInteractions(ctx, w, h, revealProgress = null) {
+  if (revealProgress === null) return;
   const overlay = state.interactionOverlay || { direct: [], evidence: [] };
+  const envelope = Math.sin(Math.PI * revealProgress);
+  const markerProgress = Math.min(1, revealProgress * 1.35);
   for (const edge of overlay.evidence) {
     const colors = {
       positive: "#2f7d66",
@@ -339,7 +360,8 @@ function drawInteractions(ctx, w, h) {
     drawCurvedLink(
       ctx, w, h, edge, colors[edge.class] || colors.context,
       edge.counted ? 1.35 : 0.8,
-      edge.counted ? 0.36 : 0.18,
+      (edge.counted ? 0.36 : 0.18) * envelope,
+      markerProgress,
       !edge.counted
     );
   }
@@ -348,7 +370,7 @@ function drawInteractions(ctx, w, h) {
     drawCurvedLink(
       ctx, w, h, edge,
       failed ? "#b65345" : (interactionColors[edge.kind] || "#637074"),
-      2.4, 0.72
+      2.4, 0.72 * envelope, markerProgress
     );
   }
 }
@@ -370,13 +392,14 @@ function drawPulses(ctx, w, h, dt) {
 }
 
 function prepareJourneys(seconds) {
+  const timing = phaseTiming(seconds);
   for (const v of state.villagers) {
     const distance = dist(v.pos, v.target);
     v.journey = distance < 0.00005 ? null : {
       from: { ...v.pos },
       to: { ...v.target },
       elapsed: 0,
-      duration: Math.max(0.08, seconds * 0.82)
+      duration: timing.travel
     };
   }
 }

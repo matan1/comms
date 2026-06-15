@@ -88,6 +88,20 @@ function phaseDuration(speed) {
   return 3.4 - speed * 0.29; // seconds per phase, ~3.1s at pace 1, ~0.5s at 10
 }
 
+function phaseTiming(duration) {
+  return {
+    travel: Math.max(0.08, duration * 0.58),
+    revealStart: duration * 0.62,
+    revealEnd: duration * 0.92
+  };
+}
+
+function interactionRevealProgress(clock, duration) {
+  const timing = phaseTiming(duration);
+  if (clock < timing.revealStart || clock >= timing.revealEnd) return null;
+  return (clock - timing.revealStart) / (timing.revealEnd - timing.revealStart);
+}
+
 function frame(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000 || 0.016);
   lastFrame = now;
@@ -97,6 +111,7 @@ function frame(now) {
     const p = params();
     if (phaseClock >= phaseDuration(p.speed)) {
       phaseClock = 0;
+      pulses = [];
       nextPhase(p);
       prepareJourneys(phaseDuration(p.speed));
       state.interactionOverlay = buildInteractionOverlay(viewpoint(), p);
@@ -108,9 +123,12 @@ function frame(now) {
   const ctx = scaledContext(ui.canvas);
   const w = ui.canvas.clientWidth;
   const h = ui.canvas.clientHeight;
+  const revealProgress = interactionRevealProgress(
+    phaseClock, phaseDuration(params().speed)
+  );
   drawWorld(ctx, w, h);
-  drawPulses(ctx, w, h, dt);
-  drawInteractions(ctx, w, h);
+  if (revealProgress !== null) drawPulses(ctx, w, h, dt);
+  drawInteractions(ctx, w, h, revealProgress);
   drawVillagers(ctx, w, h);
 
   requestAnimationFrame(frame);

@@ -134,9 +134,11 @@ outcomes.
 
 Movement is phase-budgeted: every trip completes within the current visual
 phase at every pace, while residents staying home remain exactly at their home
-instead of drifting. Lines on the map show the current phase's direct deals,
-ceremonies, help, and gossip. With a villager selected, the display is limited
-to interactions they observed and adds lighter evidence lines for attestations
+instead of drifting. Interaction data is prepared at the phase transition but
+kept hidden during travel. After everyone arrives, lines briefly fade in and
+out before the next departure; a moving marker shows direction where the
+relationship has one. With a villager selected, the display is limited to
+interactions they observed and adds lighter evidence lines for attestations
 that actually informed their own direct decisions.
 
 Injected adversaries retain their preset type. Omniscient view gives each of

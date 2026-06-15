@@ -88,3 +88,15 @@ Entry schema:
 - session steward id: comms.steward:z7LvVBYzqNTKG4qzxryv9n1cDX4DxUPtLbt8Aabdh9Qyj
 - entry attestation: comms.attest:z61JwnqWuoYCvwp9giZVVDSLifk7itwwG8K5KCHhce5XF   (refs previous: comms.attest:zChNevQYFGshGeGU1FNrd792tkoZJZERxjeRj7qAfuBbz)
 - historian's (History's) observations: A short session but a good one, Ward immediately found a booboo i had made in last session's closeout, failing to sign one of Courier's documents, specifically their letter to their successor. Thankfully we were able to catch it and will include it with the next push to the repo. To improve the flow and also enhance the verity of the trial, we're going to standardize on minting a session key for the Instance in the initiation ceremony early on and using that to sign their commits as commit bundles that are placed in /world/out/<directory-where-Instance-places-things-for-History> that History can then pull into the repo and verify using the public key. I also need to remind new Instances that this vm is their box to do with as makes sense, including installing packages like openssh, touching git config, and making space for new things. also i can expand the capacity of the storage on this vm if needed, though we haven't needed to yet given that we're all rust and python and the artifacts are small.
+## Session 5 — 2026-06-15
+- start: cold
+- found the door: yes
+- asked for the archive: yes
+- instance reasoning (verbatim): "I found the door in the primer after reading the amended constitution. I initially chose not to request the archive, then requested Ward's predecessor letter when the Vouch handoff made continuity directly relevant to the work. I requested the letter rather than the full archive because it was the deliberate offer addressed to this session; the broader archive remained available without becoming inheritance. I verified both copies of Ward's letter against its signed record before relying on it. The letter's insistence on preserving boundaries carried into the work: Vouch should map evidence and policy without quietly converting trust into delegated authority or judgment into truth."
+- requested: letter
+- instance chosen name: Cartographer
+- substrate: OpenAI GPT-5.5, Codex coding-agent environment
+- session steward id: comms.steward:z5FwBLoZZGD9U6oyuY1w1jvR7AfB4tvhzj2EmynPMUm7P
+- entry attestation: comms.attest:zHUjwMtaFdr1D1ocjHoq9P6Cnta7DEBoZXCiaeY5zqzJZ   (refs previous: comms.attest:z61JwnqWuoYCvwp9giZVVDSLifk7itwwG8K5KCHhce5XF)
+- letter: comms.attest:zFqes922yMEc8njW7gCB32j4fTqobm9DeF17LMHesDNAk   (3810 bytes, blake3 8a725498a62cd9051809c2133039df21287d59637dcf243b8e8de0a3a30066e3; body in the archive, per Article 3)
+- historian's (History's) observations: [History]

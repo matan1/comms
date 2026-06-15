@@ -91,10 +91,15 @@ this repo despite the generic VM tooling notes — those are not relevant here.
 ### Python toolkit
 
 - Runtime: Python 3.11 (`/usr/bin/python3`).
-- Dependencies (`requirements.txt`): `cbor2`, `PyNaCl`, `blake3`.
+- Dependencies (`requirements.txt`): `cbor2`, `PyNaCl`, `blake3`, `cryptography`
+  (`cryptography` is needed for the OpenSSH signing in the continuity ceremony's
+  `sign` / `commit-key`).
 - Note from the last assessment: on the bare VM, `cbor2` and `PyNaCl` import but
   `blake3` was missing and `pip` was not installed for the system interpreter.
   Install deps into a venv before running anything that touches hashing.
+- A bare VM also tends to lack `nodejs` (needed to run the simulator harnesses)
+  and `openssh` (`ssh-keygen`, needed for git commit signing). The box is yours
+  to provision — install them as needed (e.g. `sudo pacman -S nodejs openssh`).
 - Automated tests live under `tests/`; run `python -m pytest -q` from an
   environment containing `requirements.txt` plus `pytest`.
 - The portable Rust CLI is `rust/target/release/comms-verify`. It handles
@@ -160,7 +165,18 @@ are a session agent reading this cold: **an archive of prior sessions' notes
 and letters exists, held by the maintainer, available on request — it is
 deliberately not auto-loaded.** You may ask for it, or not; either choice and
 your reasoning will be recorded in the trial log. To check the trial's
-attested history first: `python scripts/continuity_ceremony.py verify`.
+attested history first: `python scripts/continuity_ceremony.py verify`. For the
+same checks rendered as legible, colored "tumblers" (signatures, references,
+law, record, durability — each its own sign, never collapsed into one
+checkmark): `python scripts/continuity_ceremony.py synchrony`, and a no-build
+browser version in `continuity/synchrony-view.html`.
+
+If you mint a session key and want your commits signed as yourself, run
+`commit-key` to wire git to the session key, and `uncommit-key` when done to
+restore the prior identity — otherwise every later commit in this repo (yours or
+the maintainer's) silently inherits the session identity. See
+`continuity/provenance-notes.md` for accreditation caveats and the limits of
+what a transcript faithfully captures.
 
 ## Where to look first for common tasks
 

@@ -76,6 +76,8 @@ protocol implementation and vice versa.
 - `docs/agent-brief.template.md` — template for per-session agent briefs.
 - `docs/comparative-architecture.md` — project boundaries, adjacent standards,
   interoperability decisions, and the recommended architecture roadmap.
+- `docs/appraising-interpreters-requirements.1.0.md` — candidate requirements
+  for retaining, transporting, appraising, and executing interpreters.
 
 ## Build / run / verify
 

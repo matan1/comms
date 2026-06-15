@@ -40,13 +40,36 @@ Architectural changes should preserve:
 - partial knowledge without pretending it is global knowledge;
 - threshold community identity, rotation, and explicit broken-chain
   succession;
-- open specifications and open-source, permissively licensed implementations;
+- open specifications and permissively licensed implementations for components
+  incorporated into the Comms distribution;
 - the distinction between well-formed evidence and evidence a Trustor accepts.
 
 The June 2026 implementation provides a useful footprint baseline: the release
 Rust verifier is about 1.2 MiB, and the current continuity store contains 23
 attestations totaling about 32 KiB of record data. Future dependencies and
 formats should justify material regressions from these properties.
+
+## Licensing And Interoperation
+
+Licensing requirements depend on the relationship to Comms:
+
+- **Incorporated components** distributed as part of Comms must use licensing
+  compatible with the project's permissive, forkable, and redistributable
+  character.
+- **First-party adapters** maintained by the Comms project should preferably be
+  permissively licensed. They may target proprietary, copyleft, commercial
+  off-the-shelf, or privately developed systems when their interfaces and
+  applicable terms permit useful lawful interoperability.
+- **Third-party adapters and deployment substitutions** are not subject to a
+  protocol-level license test. Operators may integrate Comms with systems under
+  terms they are willing and able to accept.
+
+Supporting interoperability does not incorporate the external system into
+Comms, endorse its governance or licensing, or require Comms to redistribute
+it. A popular or socially important system may warrant documentation, test
+fixtures, stable extension points, or project effort even when Comms would not
+adopt that system as a dependency. Where redistribution is restricted, users
+may need to obtain the external component separately.
 
 ## Layer Model
 
@@ -65,6 +88,8 @@ External evidence formats enter through adapters. An adapter must preserve the
 external object's bytes, identifier, proof material, and verification result.
 It must not silently translate an external credential into a native attestation
 whose signature appears to say more than the original issuer said.
+Detailed lifecycle and execution boundaries for adapters are defined in
+`docs/appraising-interpreters-requirements.1.0.md`.
 
 ## Comparative Map
 
@@ -100,22 +125,24 @@ architectural neighbor because it provides self-certifying identifiers and key
 event histories without requiring a blockchain, but its event, witness, and
 receipt model is substantially larger than the current Steward profile.
 
-An external identity profile may replace Steward in a deployment only if it
-demonstrates:
+An external identity profile may become a built-in Comms replacement for
+Steward only if it demonstrates:
 
 - deterministic offline verification from a bounded evidence bundle;
 - threshold community control, not only a single controller;
 - ordinary rotation and explicit recovery from a broken predecessor chain;
 - resistance to rollback and ambiguous competing histories;
 - compact keys, events, proofs, and implementation footprint;
-- stable open specifications, permissive implementation licensing, and test
-  vectors;
+- stable open specifications, an implementation Comms may permissively
+  redistribute, and test vectors;
 - a clear mapping from external controller authority to Comms signing
   authority.
 
-Until one candidate passes these gates, adapters should associate external
-identifiers with native keys rather than changing Attest 1.0 identifiers or
-Steward semantics.
+These gates govern incorporation into the upstream Comms distribution, not
+interoperability or a deployment owner's right to substitute another identity
+system. Until one candidate passes them, upstream adapters should associate
+external identifiers with native keys rather than changing Attest 1.0
+identifiers or Steward semantics.
 
 ## Revocation And Status
 

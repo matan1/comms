@@ -80,6 +80,7 @@ function byId(id) {
 
 const controls = hasDom ? {
   worldMode: byId("worldMode"),
+  interactionEndpoints: byId("interactionEndpoints"),
   population: byId("population"),
   farmShare: byId("farmShare"),
   trust: byId("trust"),
@@ -115,6 +116,7 @@ function rawFromControls() {
   for (const key of Object.keys(controls)) {
     if (key === "appraisalMode") raw.vouchMode = controls[key].value === "vouch";
     else if (key === "worldMode") raw.worldMode = controls[key].value;
+    else if (key === "interactionEndpoints") continue;
     else if (key !== "adversaryPreset") raw[key] = Number(controls[key].value);
   }
   return raw;
@@ -126,6 +128,12 @@ function params() {
 
 function viewpoint() {
   return selectedId ? state.byId.get(selectedId) : null;
+}
+
+function interactionEndpointMode() {
+  return hasDom && controls.interactionEndpoints
+    ? controls.interactionEndpoints.value
+    : "process";
 }
 
 function adversaryOrigin(v) {
@@ -185,6 +193,7 @@ function frame(now) {
   if (revealProgress !== null) drawPulses(ctx, w, h, dt);
   drawInteractions(ctx, w, h, revealProgress);
   drawVillagers(ctx, w, h);
+  if (world.kind === "workstation") drawWorkstationKey(ctx, w, h);
 
   requestAnimationFrame(frame);
 }
@@ -377,6 +386,7 @@ function applyWorldPresentation() {
   const workstation = world.kind === "workstation";
   document.body.dataset.world = world.kind;
   byId("surveyTitle").textContent = workstation ? "Workstation Topology" : "Village Survey";
+  byId("endpointControl").hidden = !workstation;
   byId("mapStage").setAttribute("aria-label", workstation ? "Multi-agent workstation map" : "Village map");
   byId("membersMetricLabel").textContent = workstation ? "Enrolled agents" : "Members";
   byId("coverageMetricLabel").textContent = workstation ? "Fresh-evidence coverage" : "Fresh-news coverage";
@@ -435,6 +445,7 @@ function init() {
     running = false;
     reset();
   });
+  controls.interactionEndpoints.addEventListener("change", renderStatic);
 
   syncOutputs();
   seedState(params());

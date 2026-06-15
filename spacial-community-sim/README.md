@@ -28,6 +28,19 @@ there as a **control-plane captor**. The behavioral parameters remain shared
 so the two maps can be compared without giving either one a different trust
 system.
 
+The workstation's **Interaction endpoints** control compares two projections
+of the same simulated event:
+
+- **Active processes** connects the visible agent processes at the services
+  they are currently using.
+- **Signing cores** connects the persistent identity loci inside their VM
+  boundaries.
+
+Changing this display does not reset or alter the simulation. The map key
+identifies VM boundaries, signing cores, active processes, identity tethers,
+shared services, and host interconnects. The remote gateway occupies a
+separate external-service boundary above the assemblage subnet.
+
 Run its focused smoke test without invoking the large adversary matrix:
 
 ```sh

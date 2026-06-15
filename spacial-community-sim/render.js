@@ -246,6 +246,25 @@ function roundedRect(ctx, x, y, width, height, radius) {
   ctx.closePath();
 }
 
+function drawLabelPlate(ctx, text, x, y, options = {}) {
+  const font = options.font || "10px ui-monospace, monospace";
+  const align = options.align || "center";
+  ctx.save();
+  ctx.font = font;
+  ctx.textAlign = align;
+  const metrics = ctx.measureText(text);
+  const paddingX = options.paddingX || 5;
+  const width = metrics.width + paddingX * 2;
+  const height = options.height || 17;
+  const left = align === "center" ? x - width / 2 : x - paddingX;
+  roundedRect(ctx, left, y - height + 4, width, height, 4);
+  ctx.fillStyle = options.background || "rgba(10, 19, 27, 0.82)";
+  ctx.fill();
+  ctx.fillStyle = options.color || "#e4f0f3";
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
 function drawWorkstationWorld(ctx, w, h) {
   const grad = ctx.createLinearGradient(0, 0, w, h);
   grad.addColorStop(0, "#17222d");
@@ -253,6 +272,18 @@ function drawWorkstationWorld(ctx, w, h) {
   grad.addColorStop(1, "#111a23");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
+
+  const remote = world.remoteZone;
+  roundedRect(ctx, remote.x * w, remote.y * h, remote.w * w, remote.h * h, 9);
+  ctx.fillStyle = "rgba(95, 48, 80, 0.22)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(226, 151, 199, 0.72)";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 5]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  drawLabelPlate(ctx, remote.label, (remote.x + remote.w / 2) * w,
+    (remote.y + 0.025) * h, { color: "#f0cde4" });
 
   for (const group of world.assemblages) {
     roundedRect(ctx, group.x * w, group.y * h, group.w * w, group.h * h, 10);
@@ -262,10 +293,11 @@ function drawWorkstationWorld(ctx, w, h) {
     ctx.setLineDash([5, 6]);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(151, 194, 207, 0.5)";
-    ctx.font = "9px ui-monospace, monospace";
-    ctx.textAlign = "left";
-    ctx.fillText(group.label, group.x * w + 6, group.y * h + 13);
+    drawLabelPlate(ctx, group.label, group.x * w + 7, group.y * h + 16, {
+      align: "left",
+      color: "#c4e0e7",
+      background: "rgba(18, 32, 43, 0.86)"
+    });
   }
 
   ctx.save();
@@ -295,9 +327,10 @@ function drawWorkstationWorld(ctx, w, h) {
     ctx.lineWidth = 1;
     ctx.stroke();
     if (plot && plot.claimed) {
-      ctx.fillStyle = "rgba(139, 200, 217, 0.58)";
-      ctx.font = "8px ui-monospace, monospace";
-      ctx.fillText(cell.vm, x + 4, y + 10);
+      ctx.fillStyle = "rgba(199, 229, 236, 0.88)";
+      ctx.font = "9px ui-monospace, monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(cell.vm, x + 5, y + 12);
     }
   }
 
@@ -322,16 +355,22 @@ function drawWorkstationWorld(ctx, w, h) {
       ctx.lineWidth = 3;
       ctx.stroke();
     }
-    ctx.fillStyle = "rgba(220, 235, 241, 0.88)";
-    ctx.font = "10px ui-monospace, monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(node.label, x, y + radius + 14);
+    drawLabelPlate(ctx, node.label, x, y + radius + 17, {
+      color: "#edf7f9"
+    });
     if (node.vram) {
-      ctx.fillStyle = "rgba(170, 199, 211, 0.72)";
-      ctx.fillText(`${node.vram} GB profile · ${usage ? usage.jobs : 0} jobs`, x, y + radius + 26);
+      drawLabelPlate(ctx, `${node.vram} GB · ${usage ? usage.jobs : 0} jobs`,
+        x, y + radius + 35, {
+          font: "9px ui-monospace, monospace",
+          color: "#b9d4dc",
+          background: "rgba(10, 19, 27, 0.72)"
+        });
     } else if (usage) {
-      ctx.fillStyle = "rgba(170, 199, 211, 0.72)";
-      ctx.fillText(`${usage.jobs} jobs`, x, y + radius + 26);
+      drawLabelPlate(ctx, `${usage.jobs} jobs`, x, y + radius + 35, {
+        font: "9px ui-monospace, monospace",
+        color: "#b9d4dc",
+        background: "rgba(10, 19, 27, 0.72)"
+      });
     }
   }
 
@@ -341,10 +380,10 @@ function drawWorkstationWorld(ctx, w, h) {
   ctx.fill();
   ctx.strokeStyle = "rgba(123, 205, 223, 0.82)";
   ctx.stroke();
-  ctx.fillStyle = "#cce8ee";
-  ctx.font = "11px ui-monospace, monospace";
-  ctx.textAlign = "center";
-  ctx.fillText("admission controller", control.x * w, control.y * h + 4);
+  drawLabelPlate(ctx, "admission controller", control.x * w, control.y * h + 4, {
+    color: "#e3f5f8",
+    background: "rgba(23, 53, 68, 0.86)"
+  });
 
   roundedRect(ctx, (world.camp.x - 0.055) * w, (world.camp.y - 0.04) * h, 0.11 * w, 0.08 * h, 7);
   ctx.fillStyle = "rgba(154, 111, 74, 0.22)";
@@ -353,14 +392,82 @@ function drawWorkstationWorld(ctx, w, h) {
   ctx.setLineDash([4, 4]);
   ctx.stroke();
   ctx.setLineDash([]);
-  ctx.fillStyle = "rgba(234, 207, 169, 0.9)";
-  ctx.fillText("staging network", world.camp.x * w, world.camp.y * h + 4);
+  drawLabelPlate(ctx, "staging network", world.camp.x * w,
+    (world.camp.y - 0.055) * h, {
+      color: "#f1d4a9",
+      background: "rgba(70, 48, 31, 0.9)"
+    });
 
+  drawLabelPlate(ctx, "24 GB shared accelerator envelope",
+    world.market.x * w, world.market.y * h - 94, {
+      font: "italic 11px Georgia, serif",
+      color: "#d4e6eb"
+    });
+  drawLabelPlate(ctx, "host boundary", 14, 21, {
+    align: "left",
+    font: "italic 11px Georgia, serif",
+    color: "#c1dce4"
+  });
+}
+
+function drawWorkstationKey(ctx, w, h) {
+  const x = w * 0.56;
+  const y = h * 0.80;
+  const width = Math.min(250, w * 0.18);
+  const height = 112;
+  roundedRect(ctx, x, y, width, height, 8);
+  ctx.fillStyle = "rgba(10, 19, 27, 0.88)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(139, 195, 209, 0.48)";
+  ctx.stroke();
+  ctx.fillStyle = "#e4f0f3";
+  ctx.font = "bold 10px ui-monospace, monospace";
   ctx.textAlign = "left";
-  ctx.fillStyle = "rgba(160, 196, 208, 0.55)";
-  ctx.font = "italic 11px Georgia, serif";
-  ctx.fillText("24 GB shared accelerator envelope", world.market.x * w - 78, world.market.y * h - 92);
-  ctx.fillText("host boundary", 12, 20);
+  ctx.fillText("MAP KEY", x + 12, y + 17);
+
+  const rows = [
+    ["vm", "VM boundary"],
+    ["core", "persistent signing core"],
+    ["agent", "active agent process"],
+    ["tether", "process-to-identity tether"],
+    ["service", "shared host service"],
+    ["bus", "host interconnect"]
+  ];
+  rows.forEach(([kind, label], i) => {
+    const rowY = y + 34 + i * 13;
+    ctx.beginPath();
+    if (kind === "vm") {
+      ctx.strokeStyle = "rgba(155, 205, 217, 0.75)";
+      ctx.strokeRect(x + 12, rowY - 7, 14, 9);
+    } else if (kind === "core") {
+      ctx.arc(x + 19, rowY - 2, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#bce1e8";
+      ctx.fill();
+    } else if (kind === "agent") {
+      ctx.arc(x + 19, rowY - 2, 5, 0, Math.PI * 2);
+      ctx.fillStyle = "#6a8f5a";
+      ctx.fill();
+    } else if (kind === "tether") {
+      ctx.moveTo(x + 12, rowY - 2);
+      ctx.lineTo(x + 26, rowY - 2);
+      ctx.strokeStyle = "rgba(119, 190, 209, 0.65)";
+      ctx.stroke();
+    } else if (kind === "service") {
+      ctx.arc(x + 19, rowY - 2, 6, 0, Math.PI * 2);
+      ctx.strokeStyle = "#8ab8d0";
+      ctx.stroke();
+    } else {
+      ctx.moveTo(x + 12, rowY - 2);
+      ctx.lineTo(x + 26, rowY - 2);
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = "#76cadd";
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.fillStyle = "#c9dde3";
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.fillText(label, x + 34, rowY + 1);
+  });
 }
 
 function drawVillagers(ctx, w, h) {
@@ -460,10 +567,13 @@ function curvedLinkGeometry(w, h, edge) {
   const a = state.byId.get(edge.from);
   const b = state.byId.get(edge.to);
   if (!a || !b) return null;
-  const x1 = a.pos.x * w;
-  const y1 = a.pos.y * h;
-  const x2 = b.pos.x * w;
-  const y2 = b.pos.y * h;
+  const useCore = world.kind === "workstation" && interactionEndpointMode() === "core";
+  const start = useCore ? a.home : a.pos;
+  const end = useCore ? b.home : b.pos;
+  const x1 = start.x * w;
+  const y1 = start.y * h;
+  const x2 = end.x * w;
+  const y2 = end.y * h;
   const dx = x2 - x1;
   const dy = y2 - y1;
   const len = Math.max(1, Math.hypot(dx, dy));

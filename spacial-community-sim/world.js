@@ -128,7 +128,7 @@ function buildWorkstationWorld(p) {
   const center = { x: 0.49, y: 0.53 };
   const commons = { x: 0.50, y: 0.16, r: 0.065 };
   const market = { x: 0.50, y: 0.53, r: 0.09 };
-  const farmstead = { x: 0.86, y: 0.22, r: 0.08 };
+  const farmstead = { x: 0.88, y: 0.47, r: 0.08 };
   const camp = { x: 0.12, y: 0.84 };
   const resources = [
     { id: "language", label: "language model", x: 0.38, y: 0.46, vram: 12, color: "#6c8fd3" },
@@ -137,7 +137,7 @@ function buildWorkstationWorld(p) {
     { id: "embedding", label: "embedding model", x: 0.61, y: 0.62, vram: 4, color: "#83a85d" },
     { id: "cpu", label: "CPU workers", x: 0.25, y: 0.54, vram: 0, color: "#c28b4c" },
     { id: "storage", label: "shared store", x: 0.75, y: 0.54, vram: 0, color: "#5d8ba1" },
-    { id: "remote", label: "remote services", x: 0.86, y: 0.22, vram: 0, color: "#9b6c87" }
+    { id: "remote", label: "remote gateway", x: 0.91, y: 0.10, vram: 0, color: "#c38bb0" }
   ];
   const homes = [];
   const farmHomes = [];
@@ -154,10 +154,9 @@ function buildWorkstationWorld(p) {
     vmCells.push({ ...plot, w: 0.07, h: 0.085, bank });
   }
   for (let i = 0; i < 8; i += 1) {
-    const a = (Math.PI * 2 * i) / 8;
     const plot = {
-      x: farmstead.x + Math.cos(a) * 0.075,
-      y: farmstead.y + Math.sin(a) * 0.06,
+      x: i % 2 ? 0.90 : 0.82,
+      y: 0.27 + Math.floor(i / 2) * 0.17,
       claimed: false,
       vm: `edge-${String(i + 1).padStart(2, "0")}`
     };
@@ -169,18 +168,22 @@ function buildWorkstationWorld(p) {
     [{ x: 0.85, y: 0.08 }, { x: 0.85, y: 0.90 }],
     [{ x: 0.15, y: 0.53 }, { x: 0.85, y: 0.53 }],
     [{ x: 0.50, y: 0.16 }, { x: 0.50, y: 0.78 }],
-    [{ x: 0.50, y: 0.53 }, { x: 0.72, y: 0.37 }, { x: 0.86, y: 0.22 }],
+    [{ x: 0.50, y: 0.53 }, { x: 0.72, y: 0.34 }, { x: 0.91, y: 0.10 }],
     [{ x: 0.12, y: 0.84 }, { x: 0.28, y: 0.72 }, { x: 0.50, y: 0.53 }]
   ];
   const stalls = resources.map((r) => ({ x: r.x, y: r.y, good: { id: r.id, color: r.color } }));
   const assemblages = [
     { x: 0.055, y: 0.085, w: 0.19, h: 0.78, label: "local agent bank" },
-    { x: 0.755, y: 0.085, w: 0.19, h: 0.78, label: "assemblage subnet" }
+    { x: 0.775, y: 0.20, w: 0.17, h: 0.67, label: "assemblage subnet" }
   ];
+  const remoteZone = {
+    x: 0.825, y: 0.035, w: 0.15, h: 0.12,
+    label: "external service boundary"
+  };
   const w = {
     kind: "workstation", center, commons, market, farmstead, camp,
     homes, farmHomes, trees: [], fields: [], roads, stalls, resources,
-    vmCells, assemblages, vramCapacity: 24, rng
+    vmCells, assemblages, remoteZone, vramCapacity: 24, rng
   };
   buildCostFieldFor(w);
   return w;

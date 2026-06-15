@@ -74,6 +74,8 @@ protocol implementation and vice versa.
 - `docs/transaction-visualization-plan.md` — deferred plan for a future
   simulator activity/transaction visualization.
 - `docs/agent-brief.template.md` — template for per-session agent briefs.
+- `docs/comparative-architecture.md` — project boundaries, adjacent standards,
+  interoperability decisions, and the recommended architecture roadmap.
 
 ## Build / run / verify
 

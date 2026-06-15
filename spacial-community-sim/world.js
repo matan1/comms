@@ -149,7 +149,10 @@ function buildWorkstationWorld(p) {
     const bank = Math.floor(i / 12);
     const x = side ? 0.91 - bank * 0.065 : 0.09 + bank * 0.065;
     const y = 0.145 + row * 0.125;
-    const plot = { x, y, claimed: false, vm: `vm-${String(i + 1).padStart(2, "0")}` };
+    const plot = {
+      x, y, claimed: false,
+      vm: `${vmNames[i % vmNames.length]}-${String(Math.floor(i / vmNames.length) + 1).padStart(2, "0")}`
+    };
     homes.push(plot);
     vmCells.push({ ...plot, w: 0.07, h: 0.085, bank });
   }
@@ -158,7 +161,7 @@ function buildWorkstationWorld(p) {
       x: i % 2 ? 0.90 : 0.82,
       y: 0.27 + Math.floor(i / 2) * 0.17,
       claimed: false,
-      vm: `edge-${String(i + 1).padStart(2, "0")}`
+      vm: `waypoint-${String(i + 1).padStart(2, "0")}`
     };
     farmHomes.push(plot);
     vmCells.push({ ...plot, w: 0.06, h: 0.07, bank: 3 });
@@ -427,7 +430,7 @@ function surveyNewVm(pool) {
         x: claimed % 2 ? 0.91 - layer * 0.025 : 0.09 + layer * 0.025,
         y: clamp(0.12 + row * 0.12, 0.08, 0.92)
       };
-  plot.vm = `vm-${String(world.vmCells.length + 1).padStart(2, "0")}`;
+  plot.vm = `provision-${String(world.vmCells.length + 1).padStart(2, "0")}`;
   world.vmCells.push({ ...plot, w: 0.06, h: 0.075, bank: 4 + layer });
   return { ...plot, claimed: false };
 }
@@ -440,3 +443,7 @@ function tooCrowded(cand) {
   }
   return false;
 }
+  const vmNames = [
+    "cinder", "lattice", "keystone", "parallax", "quorum", "meridian",
+    "aperture", "vector", "relay", "harbor", "prism", "archive"
+  ];

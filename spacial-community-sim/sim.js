@@ -31,6 +31,12 @@ const names = [
   "Corwin", "Hesper", "Dagny", "Ilias", "Ferra", "Oswin", "Prue"
 ];
 
+const agentNames = [
+  "Axiom", "Beacon", "Cipher", "Delta", "Echo", "Facet", "Glyph", "Helix",
+  "Ion", "Junction", "Kernel", "Lumen", "Mosaic", "Nexus", "Orbit", "Praxis",
+  "Quanta", "Relay", "Signal", "Tensor", "Umbra", "Vector", "Weave", "Zenith"
+];
+
 const goodsTable = [
   { id: "grain", color: "#c9a24b" },
   { id: "timber", color: "#8a6a45" },
@@ -171,7 +177,8 @@ function makeVillager(index, opts = {}) {
   const specialties = world.kind === "workstation" ? serviceTable : goodsTable;
   return {
     id: `comms.steward:z${String(index + 1).padStart(3, "0")}`,
-    label: names[index % names.length],
+    label: (world.kind === "workstation" ? agentNames : names)[index
+      % (world.kind === "workstation" ? agentNames.length : names.length)],
     member: opts.member !== false,
     archetype: opts.archetype || "honest",
     farmstead: farm,                  // descriptive only; presence is cost-driven
@@ -648,7 +655,9 @@ function phaseCommons(p) {
       candidate.member = true;
       candidate.joinedDay = state.day;
       candidate.sponsors = sponsors.slice(0, p.sponsors).map((s) => s.id);
-      candidate.home = claimHome(world.homes);
+      if (world.kind !== "workstation" || !candidate.home.vm) {
+        candidate.home = claimHome(world.homes);
+      }
       for (const s of sponsors.slice(0, p.sponsors)) {
         addAttestation({
           type: "endorsement/1",
@@ -709,11 +718,14 @@ function failureReason(p, sponsors, witnesses, objections) {
 }
 
 function arrive(archetype, ap = null, adversaryType = null) {
+  const stagedVm = world.kind === "workstation" ? claimHome(world.homes) : { ...world.camp };
   const v = makeVillager(state.nextVillager++, {
     member: false,
     archetype,
-    home: { ...world.camp },
-    pos: { x: 0.14, y: 0.99 },
+    home: stagedVm,
+    pos: world.kind === "workstation"
+      ? { x: world.camp.x, y: world.camp.y }
+      : { x: 0.14, y: 0.99 },
     ap,
     adversaryType
   });

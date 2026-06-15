@@ -49,6 +49,12 @@ if (state.phase !== 1 || state.resourceTelemetry.jobs < 1) {
 }
 
 const adversary = injectAdversary("sovereign");
+if (!adversary.home.vm || !adversary.home.claimed) {
+  throw new Error("staged agent lacks a persistent VM identity locus");
+}
+if (agentNames.includes(names[0])) {
+  throw new Error("workstation and village naming vocabularies overlap");
+}
 if (adversaryName(adversary.adversaryType) !== "control-plane captor") {
   throw new Error("workstation adversary vocabulary missing");
 }

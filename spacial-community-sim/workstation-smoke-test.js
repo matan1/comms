@@ -15,6 +15,20 @@ if (!world.remoteZone || world.remoteZone.y >= world.assemblages[1].y) {
   throw new Error("remote gateway is not separated from the assemblage subnet");
 }
 if (!members()[0].home.vm) throw new Error("enrolled agent lacks a VM cell");
+const leftRows = world.vmCells.filter((cell) => cell.x < 0.5).slice(0, 18);
+const rowLevels = new Set(leftRows.map((cell) => cell.y.toFixed(4)));
+if (rowLevels.size !== 6) throw new Error("VM rows are not aligned");
+const pulsePair = members().slice(0, 2);
+pulsePair[0].pos = { x: 0.48, y: 0.48 };
+pulsePair[1].pos = { x: 0.52, y: 0.52 };
+pulses = [];
+ripple(pulsePair[0], pulsePair[1], true);
+const expectedPulseX = (pulsePair[0].home.x + pulsePair[1].home.x) / 2;
+const expectedPulseY = (pulsePair[0].home.y + pulsePair[1].home.y) / 2;
+if (Math.abs(pulses[0].x - expectedPulseX) > 1e-9
+    || Math.abs(pulses[0].y - expectedPulseY) > 1e-9) {
+  throw new Error("store synchronization pulse is not anchored to VM homes");
+}
 if (interactionEndpointMode() !== "process") {
   throw new Error("headless endpoint default changed");
 }

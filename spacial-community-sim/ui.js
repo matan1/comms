@@ -165,6 +165,18 @@ function interactionRevealProgress(clock, duration) {
   return (clock - timing.revealStart) / (timing.revealEnd - timing.revealStart);
 }
 
+function phaseActivity(clock, duration) {
+  const timing = phaseTiming(duration);
+  if (clock < timing.travel) return world.kind === "workstation" ? "routing" : "traveling";
+  if (clock < timing.revealEnd) return world.kind === "workstation" ? "exchanging" : "interacting";
+  return "settled";
+}
+
+function renderClock() {
+  const duration = phaseDuration(params().speed);
+  ui.clock.textContent = `${world.kind === "workstation" ? "Cycle" : "Day"} ${state.day} · ${phaseLabel()} · ${phaseActivity(phaseClock, duration)}`;
+}
+
 function frame(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000 || 0.016);
   lastFrame = now;
@@ -181,6 +193,7 @@ function frame(now) {
       renderStatic();
     }
   }
+  renderClock();
 
   moveVillagers(dt);
   const ctx = scaledContext(ui.canvas);
@@ -201,7 +214,7 @@ function frame(now) {
 // DOM-side panels: only re-rendered on phase changes or interaction.
 function renderStatic() {
   state.interactionOverlay = buildInteractionOverlay(viewpoint(), params());
-  ui.clock.textContent = `${world.kind === "workstation" ? "Cycle" : "Day"} ${state.day} · ${phaseLabel()}`;
+  renderClock();
   ui.membersMetric.textContent = String(members().length);
   ui.attestMetric.textContent = String(state.attestations.length);
   ui.coverageMetric.textContent = `${Math.round(state.cached.coverage * 100)}%`;

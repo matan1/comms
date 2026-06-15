@@ -835,7 +835,7 @@ function gossipByProximity(group, p) {
         talks += 1;
         const moved = exchange(v, o, p.gossipDepth);
         if (moved > 0) {
-          ripple(v, o);
+          ripple(v, o, true);
           recordInteraction("gossip", [v, o], {
             primary: [v.id, o.id],
             outcome: `${moved}-records`

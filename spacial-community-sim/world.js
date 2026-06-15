@@ -147,8 +147,8 @@ function buildWorkstationWorld(p) {
     const side = i % 2;
     const row = Math.floor(i / 2) % columns;
     const bank = Math.floor(i / 12);
-    const x = side ? 0.82 + bank * 0.045 : 0.08 + bank * 0.045;
-    const y = 0.14 + row * 0.125 + (rng() - 0.5) * 0.012;
+    const x = side ? 0.91 - bank * 0.065 : 0.09 + bank * 0.065;
+    const y = 0.145 + row * 0.125;
     const plot = { x, y, claimed: false, vm: `vm-${String(i + 1).padStart(2, "0")}` };
     homes.push(plot);
     vmCells.push({ ...plot, w: 0.07, h: 0.085, bank });

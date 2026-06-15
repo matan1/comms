@@ -40,12 +40,14 @@ const adversaryColors = {
   sovereign: "#4f3f91"
 };
 
-function ripple(a, b) {
+function ripple(a, b, useHomes = false) {
   if (pulses.length > 140) return;
+  const from = useHomes ? a.home : (a.spot || a.pos);
+  const to = useHomes ? b.home : (b.spot || b.pos);
   pulses.push({
     kind: "gossip",
-    x: ((a.spot || a.pos).x + (b.spot || b.pos).x) / 2,
-    y: ((a.spot || a.pos).y + (b.spot || b.pos).y) / 2,
+    x: (from.x + to.x) / 2,
+    y: (from.y + to.y) / 2,
     t: 0,
     color: "#4f8f8b"
   });

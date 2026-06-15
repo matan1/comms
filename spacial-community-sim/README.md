@@ -41,6 +41,19 @@ identifies VM boundaries, signing cores, active processes, identity tethers,
 shared services, and host interconnects. The remote gateway occupies a
 separate external-service boundary above the assemblage subnet.
 
+Two further workstation display experiments are available:
+
+- **Key custody** compares embedded keys, one host key-manager VM, and
+  federated managers for the local bank and assemblage subnet. Managed modes
+  render VM-local points as signing handles rather than key custody.
+- **Signature ledger** shows an optional host-trusted, signature-only append
+  service and its current signed-entry volume.
+
+After four failed admission attempts, a workstation VM is now visibly
+**suspended** and retained rather than silently released for reuse. Deletion,
+snapshot restoration, and key destruction remain distinct future lifecycle
+operations.
+
 Run its focused smoke test without invoking the large adversary matrix:
 
 ```sh

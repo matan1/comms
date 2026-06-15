@@ -32,6 +32,14 @@ if (Math.abs(pulses[0].x - expectedPulseX) > 1e-9
 if (interactionEndpointMode() !== "process") {
   throw new Error("headless endpoint default changed");
 }
+if (keyCustodyMode() !== "embedded" || ledgerMode() !== "off") {
+  throw new Error("headless custody defaults changed");
+}
+if (world.keyManagers.host.length !== 1
+    || world.keyManagers.federated.length !== 2
+    || !world.ledger) {
+  throw new Error("custody topology incomplete");
+}
 const edge = { from: members()[0].id, to: members()[1].id, lane: 0 };
 members()[0].pos = { x: 0.5, y: 0.5 };
 const processPath = curvedLinkGeometry(1000, 1000, edge);
@@ -51,6 +59,10 @@ if (state.phase !== 1 || state.resourceTelemetry.jobs < 1) {
 const adversary = injectAdversary("sovereign");
 if (!adversary.home.vm || !adversary.home.claimed) {
   throw new Error("staged agent lacks a persistent VM identity locus");
+}
+adversary.home.status = "suspended";
+if (!adversary.home.claimed || adversary.home.status !== "suspended") {
+  throw new Error("suspended VM was released");
 }
 if (agentNames.includes(names[0])) {
   throw new Error("workstation and village naming vocabularies overlap");

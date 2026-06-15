@@ -183,10 +183,18 @@ function buildWorkstationWorld(p) {
     x: 0.825, y: 0.035, w: 0.15, h: 0.12,
     label: "external service boundary"
   };
+  const keyManagers = {
+    host: [{ id: "host-km", label: "host key manager", x: 0.50, y: 0.77 }],
+    federated: [
+      { id: "local-km", label: "local-bank key manager", x: 0.29, y: 0.78 },
+      { id: "assemblage-km", label: "assemblage key manager", x: 0.71, y: 0.78 }
+    ]
+  };
+  const ledger = { label: "signature-only host ledger", x: 0.50, y: 0.91 };
   const w = {
     kind: "workstation", center, commons, market, farmstead, camp,
     homes, farmHomes, trees: [], fields: [], roads, stalls, resources,
-    vmCells, assemblages, remoteZone, vramCapacity: 24, rng
+    vmCells, assemblages, remoteZone, keyManagers, ledger, vramCapacity: 24, rng
   };
   buildCostFieldFor(w);
   return w;

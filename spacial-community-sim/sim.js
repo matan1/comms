@@ -684,11 +684,21 @@ function phaseCommons(p) {
       logEvent("objection/1", `${candidate.label} not admitted`,
         failureReason(p, sponsors.length, attendees.length, objectors.length));
       if (candidate.failedPetitions >= 4) {
-        releaseHome(candidate);
+        if (world.kind === "workstation") {
+          candidate.home.status = "suspended";
+          candidate.home.formerIdentity = candidate.label;
+        } else {
+          releaseHome(candidate);
+        }
         state.villagers = state.villagers.filter((v) => v !== candidate);
         state.byId.delete(candidate.id);
-        logEvent("ceremony-record/1", `${candidate.label} moved on`,
-          "Four ceremonies held without commitment; they took the south road at dawn.");
+        logEvent("ceremony-record/1",
+          world.kind === "workstation"
+            ? `${candidate.label}'s VM suspended`
+            : `${candidate.label} moved on`,
+          world.kind === "workstation"
+            ? `${candidate.home.vm} remains allocated and quarantined; deletion, restoration, and key destruction are separate host actions.`
+            : "Four ceremonies held without commitment; they took the south road at dawn.");
       }
     }
   }

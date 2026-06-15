@@ -42,6 +42,19 @@
                 <option value="core">Signing cores</option>
               </select>
             </label>
+            <label id="custodyControl" hidden>Key custody
+              <select id="keyCustody">
+                <option value="embedded">Embedded in VM</option>
+                <option value="host">Host key manager</option>
+                <option value="federated">Federated managers</option>
+              </select>
+            </label>
+            <label id="ledgerControl" hidden>Signature ledger
+              <select id="ledgerMode">
+                <option value="off">Hidden</option>
+                <option value="host">Host append ledger</option>
+              </select>
+            </label>
             <p id="worldDescription" class="control-note"></p>
           </div>
           <div class="control-group">

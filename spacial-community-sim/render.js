@@ -333,8 +333,24 @@ function drawWorkstationWorld(ctx, w, h) {
       ctx.font = "9px ui-monospace, monospace";
       ctx.textAlign = "left";
       ctx.fillText(cell.vm, x + 5, y + 12);
+      if (plot.status === "suspended") {
+        ctx.fillStyle = "rgba(232, 115, 115, 0.18)";
+        ctx.fillRect(x, y, cell.w * w, cell.h * h);
+        ctx.strokeStyle = "rgba(235, 130, 130, 0.9)";
+        ctx.setLineDash([3, 3]);
+        ctx.strokeRect(x, y, cell.w * w, cell.h * h);
+        ctx.setLineDash([]);
+        drawLabelPlate(ctx, "SUSPENDED", x + cell.w * w / 2,
+          y + cell.h * h - 6, {
+            font: "8px ui-monospace, monospace",
+            color: "#ffc4c4",
+            background: "rgba(74, 25, 29, 0.9)"
+          });
+      }
     }
   }
+
+  drawCustodyTopology(ctx, w, h);
 
   const telemetry = state.resourceTelemetry || {};
   for (const node of world.resources) {
@@ -410,6 +426,72 @@ function drawWorkstationWorld(ctx, w, h) {
     font: "italic 11px Georgia, serif",
     color: "#c1dce4"
   });
+}
+
+function managerFor(v, mode) {
+  if (mode === "host") return world.keyManagers.host[0];
+  return v.home.x < 0.5
+    ? world.keyManagers.federated[0]
+    : world.keyManagers.federated[1];
+}
+
+function drawCustodyTopology(ctx, w, h) {
+  const mode = keyCustodyMode();
+  if (mode !== "embedded") {
+    const managers = world.keyManagers[mode];
+    for (const v of state.villagers) {
+      const manager = managerFor(v, mode);
+      ctx.beginPath();
+      ctx.moveTo(v.home.x * w, v.home.y * h);
+      ctx.lineTo(manager.x * w, manager.y * h);
+      ctx.strokeStyle = "rgba(164, 139, 210, 0.10)";
+      ctx.lineWidth = 0.7;
+      ctx.stroke();
+    }
+    for (const manager of managers) {
+      const x = manager.x * w;
+      const y = manager.y * h;
+      roundedRect(ctx, x - 48, y - 20, 96, 40, 7);
+      ctx.fillStyle = "rgba(72, 51, 94, 0.82)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(199, 165, 231, 0.88)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      drawLabelPlate(ctx, manager.label, x, y + 4, {
+        color: "#f0dcff",
+        background: "rgba(48, 32, 65, 0.9)"
+      });
+    }
+  }
+
+  if (ledgerMode() === "host") {
+    const ledger = world.ledger;
+    const x = ledger.x * w;
+    const y = ledger.y * h;
+    const sources = mode === "embedded" ? [] : world.keyManagers[mode];
+    for (const source of sources) {
+      ctx.beginPath();
+      ctx.moveTo(source.x * w, source.y * h);
+      ctx.lineTo(x, y - 18);
+      ctx.strokeStyle = "rgba(225, 185, 91, 0.48)";
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    roundedRect(ctx, x - 78, y - 22, 156, 44, 7);
+    ctx.fillStyle = "rgba(69, 55, 26, 0.9)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(235, 196, 101, 0.9)";
+    ctx.stroke();
+    drawLabelPlate(ctx, ledger.label, x, y - 1, {
+      color: "#ffe7a7",
+      background: "rgba(54, 42, 19, 0.92)"
+    });
+    ctx.fillStyle = "#d9c58d";
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(`${state.attestations.length} signed entries · host-trusted`, x, y + 14);
+  }
 }
 
 function drawWorkstationKey(ctx, w, h) {
@@ -492,8 +574,14 @@ function drawVillagers(ctx, w, h) {
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(hx, hy, 2.4, 0, Math.PI * 2);
-      ctx.fillStyle = "#bce1e8";
-      ctx.fill();
+      if (keyCustodyMode() === "embedded") {
+        ctx.fillStyle = "#bce1e8";
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = "#d8b7ed";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
     }
 
     let fill;

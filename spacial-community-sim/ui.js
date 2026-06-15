@@ -81,6 +81,8 @@ function byId(id) {
 const controls = hasDom ? {
   worldMode: byId("worldMode"),
   interactionEndpoints: byId("interactionEndpoints"),
+  keyCustody: byId("keyCustody"),
+  ledgerMode: byId("ledgerMode"),
   population: byId("population"),
   farmShare: byId("farmShare"),
   trust: byId("trust"),
@@ -116,7 +118,7 @@ function rawFromControls() {
   for (const key of Object.keys(controls)) {
     if (key === "appraisalMode") raw.vouchMode = controls[key].value === "vouch";
     else if (key === "worldMode") raw.worldMode = controls[key].value;
-    else if (key === "interactionEndpoints") continue;
+    else if (["interactionEndpoints", "keyCustody", "ledgerMode"].includes(key)) continue;
     else if (key !== "adversaryPreset") raw[key] = Number(controls[key].value);
   }
   return raw;
@@ -134,6 +136,14 @@ function interactionEndpointMode() {
   return hasDom && controls.interactionEndpoints
     ? controls.interactionEndpoints.value
     : "process";
+}
+
+function keyCustodyMode() {
+  return hasDom && controls.keyCustody ? controls.keyCustody.value : "embedded";
+}
+
+function ledgerMode() {
+  return hasDom && controls.ledgerMode ? controls.ledgerMode.value : "off";
 }
 
 function adversaryOrigin(v) {
@@ -400,6 +410,8 @@ function applyWorldPresentation() {
   document.body.dataset.world = world.kind;
   byId("surveyTitle").textContent = workstation ? "Workstation Topology" : "Village Survey";
   byId("endpointControl").hidden = !workstation;
+  byId("custodyControl").hidden = !workstation;
+  byId("ledgerControl").hidden = !workstation;
   byId("mapStage").setAttribute("aria-label", workstation ? "Multi-agent workstation map" : "Village map");
   byId("membersMetricLabel").textContent = workstation ? "Enrolled agents" : "Members";
   byId("coverageMetricLabel").textContent = workstation ? "Fresh-evidence coverage" : "Fresh-news coverage";
@@ -459,6 +471,8 @@ function init() {
     reset();
   });
   controls.interactionEndpoints.addEventListener("change", renderStatic);
+  controls.keyCustody.addEventListener("change", renderStatic);
+  controls.ledgerMode.addEventListener("change", renderStatic);
 
   syncOutputs();
   seedState(params());

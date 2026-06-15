@@ -7,3 +7,4 @@ continuity/session-signing.key
 continuity/session-signing.key.pub
 continuity/allowed_signers
 continuity/pending/
+continuity/.commit-key-git-backup.json

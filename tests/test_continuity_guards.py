@@ -456,3 +456,27 @@ def test_synchrony_json_marks_empty_store_axes_not_applicable(trial, capsys):
     assert data["axes"]["signatures"]["state"] == "na"
     assert data["aligned"] is False
     assert rc == 1
+
+
+# --- commit-key wiring must be reversible (accreditation) -------------------------
+
+def test_commit_key_then_uncommit_key_restores_prior_identity(git_trial):
+    cc, repo, base, store_dir, pending = git_trial
+    # a prior identity (e.g. the historian's), unsigned — the norm to restore to
+    _git(repo, "config", "user.name", "Historian")
+    _git(repo, "config", "user.email", "hist@example.com")
+    session = cc.Steward.generate()
+    session.save(base / "session.key")
+
+    cc.cmd_commit_key(Namespace(name="Seam", key_file=str(base / "session.key")))
+    assert cc._git_config_get("user.name") == "Seam"
+    assert cc._git_config_get("user.email") == session.id
+    assert cc._git_config_get("commit.gpgsign") == "true"
+    assert (base / ".commit-key-git-backup.json").exists()
+
+    cc.cmd_uncommit_key(Namespace())
+    assert cc._git_config_get("user.name") == "Historian"
+    assert cc._git_config_get("user.email") == "hist@example.com"
+    assert cc._git_config_get("commit.gpgsign") in (None, "")
+    assert cc._git_config_get("user.signingkey") in (None, "")
+    assert not (base / ".commit-key-git-backup.json").exists()

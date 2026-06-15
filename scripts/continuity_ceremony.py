@@ -322,6 +322,30 @@ def _git_config(key: str, value: str) -> None:
     subprocess.run(["git", "-C", str(REPO), "config", key, value], check=True)
 
 
+def _git_config_get(key: str) -> str | None:
+    import subprocess
+    r = subprocess.run(["git", "-C", str(REPO), "config", "--local", "--get", key],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _git_config_unset(key: str) -> None:
+    import subprocess
+    subprocess.run(["git", "-C", str(REPO), "config", "--local", "--unset", key],
+                   capture_output=True)
+
+
+# The git identity commit-key overwrites is backed up here so uncommit-key can
+# put it back exactly — accreditation must be reversible, or a session's wiring
+# silently captures whoever uses the repo next (the d1240cd misattribution).
+GIT_ID_KEYS = ["user.name", "user.email", "commit.gpgsign",
+               "user.signingkey", "gpg.format", "gpg.ssh.allowedsignersfile"]
+
+
+def _git_id_backup_path() -> Path:
+    return BASE / ".commit-key-git-backup.json"
+
+
 def find_session_entry(store: "Store", session_id: str):
     """Locate this session's trial-log entry in the store by its own seed, so
     the closing rite can infer the session number, prior-entry id, and chosen
@@ -999,6 +1023,14 @@ def cmd_commit_key(args):
     signers.write_text(
         allowed_signers_from_store(Store(STORE), extra=[(session.id, session.pubkey)]))
 
+    # Back up the prior git identity before overwriting it, once, so the wiring
+    # is reversible (uncommit-key). Don't clobber an existing backup with the
+    # session values if commit-key is re-run.
+    backup = _git_id_backup_path()
+    if not backup.exists():
+        prior = {k: _git_config_get(k) for k in GIT_ID_KEYS}
+        backup.write_text(json.dumps(prior, indent=2))
+
     _git_config("gpg.format", "ssh")
     _git_config("user.signingkey", str(priv))
     _git_config("gpg.ssh.allowedSignersFile", str(signers))
@@ -1010,6 +1042,38 @@ def cmd_commit_key(args):
     print(f"  signing key:     {priv}  (gitignored; the seed never leaves)")
     print(f"  allowed signers: {signers}")
     print("verify any commit with:  git verify-commit <rev>")
+    print("when done, hand git back:  uncommit-key  (restores the prior identity)")
+    return 0
+
+
+def cmd_uncommit_key(args):
+    """Undo commit-key: restore the git identity that was in place before the
+    repo was wired to sign as the session key. Accreditation depends on this —
+    once the session's own commits are made, further commits (closeout, the
+    historian's) must not silently inherit the session identity and key. Without
+    a backup, it strips the session signing config and leaves the name/email to
+    you."""
+    backup = _git_id_backup_path()
+    if backup.exists():
+        prior = json.loads(backup.read_text())
+        for k in GIT_ID_KEYS:
+            v = prior.get(k)
+            if v:
+                _git_config(k, v)
+            else:
+                _git_config_unset(k)
+        backup.unlink()
+        print("restored the git identity from before commit-key.")
+    else:
+        for k in ["commit.gpgsign", "user.signingkey", "gpg.format",
+                  "gpg.ssh.allowedsignersfile"]:
+            _git_config_unset(k)
+        print("no backup found; stripped the session signing config. "
+              "set user.name/user.email yourself if needed.")
+    name = _git_config_get("user.name")
+    email = _git_config_get("user.email")
+    print(f"  git now commits as: {name or '(unset)'} <{email or '(unset)'}>")
+    print(f"  commit.gpgsign: {_git_config_get('commit.gpgsign') or '(unset)'}")
     return 0
 
 
@@ -1434,6 +1498,9 @@ def main():
                     help="git author name (frame; the email is the steward id)")
     ck.add_argument("--key-file", default=None, help="path to session key file")
 
+    sub.add_parser("uncommit-key",
+                   help="undo commit-key: restore the git identity it overwrote")
+
     am = sub.add_parser("amend",
                         help="Article 7: supersede the constitution with a revised rule/1")
     am.add_argument("--constitution", default=str(BASE / "constitution.md"),
@@ -1474,6 +1541,7 @@ def main():
     return {"mint": cmd_mint, "genesis": cmd_genesis, "sign": cmd_sign,
             "finalize": cmd_finalize, "destroy-key": cmd_destroy_key,
             "verify": cmd_verify, "commit-key": cmd_commit_key,
+            "uncommit-key": cmd_uncommit_key,
             "amend": cmd_amend, "name-commit": cmd_name_commit,
             "name-verify": cmd_name_verify,
             "new-session": cmd_new_session,

@@ -47,6 +47,10 @@ let world; // assigned in sim.js seedState(); declared here, first script
 // simply far away, and the cost field makes far expensive.
 
 function buildWorld(p) {
+  return p.worldMode === "workstation" ? buildWorkstationWorld(p) : buildVillageWorld(p);
+}
+
+function buildVillageWorld(p) {
   const rng = makeRng(20260611);
   const center = { x: 0.40, y: 0.56 };
   const commons = { x: 0.305, y: 0.50, r: 0.052 };
@@ -111,7 +115,73 @@ function buildWorld(p) {
     });
   }
 
-  const w = { center, commons, market, farmstead, camp, homes, farmHomes, trees, fields, roads, stalls, rng };
+  const w = {
+    kind: "village", center, commons, market, farmstead, camp,
+    homes, farmHomes, trees, fields, roads, stalls, rng
+  };
+  buildCostFieldFor(w);
+  return w;
+}
+
+function buildWorkstationWorld(p) {
+  const rng = makeRng(20260615);
+  const center = { x: 0.49, y: 0.53 };
+  const commons = { x: 0.50, y: 0.16, r: 0.065 };
+  const market = { x: 0.50, y: 0.53, r: 0.09 };
+  const farmstead = { x: 0.86, y: 0.22, r: 0.08 };
+  const camp = { x: 0.12, y: 0.84 };
+  const resources = [
+    { id: "language", label: "language model", x: 0.38, y: 0.46, vram: 12, color: "#6c8fd3" },
+    { id: "vision", label: "vision model", x: 0.62, y: 0.46, vram: 10, color: "#b96fc7" },
+    { id: "speech", label: "speech I/O", x: 0.39, y: 0.62, vram: 5, color: "#55a9a1" },
+    { id: "embedding", label: "embedding model", x: 0.61, y: 0.62, vram: 4, color: "#83a85d" },
+    { id: "cpu", label: "CPU workers", x: 0.25, y: 0.54, vram: 0, color: "#c28b4c" },
+    { id: "storage", label: "shared store", x: 0.75, y: 0.54, vram: 0, color: "#5d8ba1" },
+    { id: "remote", label: "remote services", x: 0.86, y: 0.22, vram: 0, color: "#9b6c87" }
+  ];
+  const homes = [];
+  const farmHomes = [];
+  const vmCells = [];
+  const columns = 6;
+  for (let i = 0; i < 36; i += 1) {
+    const side = i % 2;
+    const row = Math.floor(i / 2) % columns;
+    const bank = Math.floor(i / 12);
+    const x = side ? 0.82 + bank * 0.045 : 0.08 + bank * 0.045;
+    const y = 0.14 + row * 0.125 + (rng() - 0.5) * 0.012;
+    const plot = { x, y, claimed: false, vm: `vm-${String(i + 1).padStart(2, "0")}` };
+    homes.push(plot);
+    vmCells.push({ ...plot, w: 0.07, h: 0.085, bank });
+  }
+  for (let i = 0; i < 8; i += 1) {
+    const a = (Math.PI * 2 * i) / 8;
+    const plot = {
+      x: farmstead.x + Math.cos(a) * 0.075,
+      y: farmstead.y + Math.sin(a) * 0.06,
+      claimed: false,
+      vm: `edge-${String(i + 1).padStart(2, "0")}`
+    };
+    farmHomes.push(plot);
+    vmCells.push({ ...plot, w: 0.06, h: 0.07, bank: 3 });
+  }
+  const roads = [
+    [{ x: 0.15, y: 0.08 }, { x: 0.15, y: 0.90 }],
+    [{ x: 0.85, y: 0.08 }, { x: 0.85, y: 0.90 }],
+    [{ x: 0.15, y: 0.53 }, { x: 0.85, y: 0.53 }],
+    [{ x: 0.50, y: 0.16 }, { x: 0.50, y: 0.78 }],
+    [{ x: 0.50, y: 0.53 }, { x: 0.72, y: 0.37 }, { x: 0.86, y: 0.22 }],
+    [{ x: 0.12, y: 0.84 }, { x: 0.28, y: 0.72 }, { x: 0.50, y: 0.53 }]
+  ];
+  const stalls = resources.map((r) => ({ x: r.x, y: r.y, good: { id: r.id, color: r.color } }));
+  const assemblages = [
+    { x: 0.055, y: 0.085, w: 0.19, h: 0.78, label: "local agent bank" },
+    { x: 0.755, y: 0.085, w: 0.19, h: 0.78, label: "assemblage subnet" }
+  ];
+  const w = {
+    kind: "workstation", center, commons, market, farmstead, camp,
+    homes, farmHomes, trees: [], fields: [], roads, stalls, resources,
+    vmCells, assemblages, vramCapacity: 24, rng
+  };
   buildCostFieldFor(w);
   return w;
 }
@@ -308,6 +378,7 @@ function releaseHome(v) {
 }
 
 function surveyNewPlot(pool) {
+  if (world.kind === "workstation") return surveyNewVm(pool);
   const farm = pool === world.farmHomes;
   const anchor = farm ? world.farmstead : world.center;
   const claimedCount = pool.filter((h) => h.claimed).length;
@@ -337,6 +408,25 @@ function surveyNewPlot(pool) {
     };
   }
   return { x: best.x, y: best.y, claimed: false };
+}
+
+function surveyNewVm(pool) {
+  const edge = pool === world.farmHomes;
+  const claimed = pool.filter((h) => h.claimed).length;
+  const row = claimed % 7;
+  const layer = Math.floor(claimed / 7);
+  const plot = edge
+    ? {
+        x: clamp(0.88 - layer * 0.025, 0.72, 0.94),
+        y: clamp(0.12 + row * 0.11, 0.08, 0.92)
+      }
+    : {
+        x: claimed % 2 ? 0.91 - layer * 0.025 : 0.09 + layer * 0.025,
+        y: clamp(0.12 + row * 0.12, 0.08, 0.92)
+      };
+  plot.vm = `vm-${String(world.vmCells.length + 1).padStart(2, "0")}`;
+  world.vmCells.push({ ...plot, w: 0.06, h: 0.075, bank: 4 + layer });
+  return { ...plot, claimed: false };
 }
 
 function tooCrowded(cand) {

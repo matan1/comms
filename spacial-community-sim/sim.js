@@ -39,6 +39,16 @@ const goodsTable = [
   { id: "pots", color: "#a96e4f" }
 ];
 
+const serviceTable = [
+  { id: "language", color: "#6c8fd3", vram: 12 },
+  { id: "vision", color: "#b96fc7", vram: 10 },
+  { id: "speech", color: "#55a9a1", vram: 5 },
+  { id: "embedding", color: "#83a85d", vram: 4 },
+  { id: "cpu", color: "#c28b4c", vram: 0 },
+  { id: "storage", color: "#5d8ba1", vram: 0 },
+  { id: "remote", color: "#9b6c87", vram: 0 }
+];
+
 const attColors = {
   "ceremony-record/1": "#2e6f9e",
   "endorsement/1": "#2f7d66",
@@ -52,6 +62,27 @@ const PHASES = [
   { key: "commons", label: "Commons" },
   { key: "evening", label: "Evening" }
 ];
+
+const WORKSTATION_PHASE_LABELS = [
+  "Local work", "Resource fabric", "Control plane", "Store synchronization"
+];
+
+function phaseLabel(phase = state ? state.phase : 0) {
+  return world && world.kind === "workstation"
+    ? WORKSTATION_PHASE_LABELS[phase]
+    : PHASES[phase].label;
+}
+
+function emptyResourceTelemetry() {
+  return {
+    vramUsed: 0,
+    vramCapacity: world && world.vramCapacity ? world.vramCapacity : 0,
+    remoteCalls: 0,
+    jobs: 0,
+    failedJobs: 0,
+    byResource: {}
+  };
+}
 
 // Same attack vocabulary as the original simulator. Values are probabilities
 // except activationDelay (days). The spatial harness runs every preset against
@@ -84,6 +115,7 @@ const ADVERSARY_PRESETS = {
 // keep running.
 function normalizeParams(raw) {
   return {
+    worldMode: raw.worldMode === "workstation" ? "workstation" : "village",
     population: Math.round(raw.population ?? 18),
     farmShare: (raw.farmShare ?? 25) / 100,
     trust: (raw.trust ?? 55) / 100,
@@ -136,13 +168,14 @@ function weightedPick(items, weightFn) {
 function makeVillager(index, opts = {}) {
   const farm = opts.farmstead === true;
   const home = opts.home || claimHome(farm ? world.farmHomes : world.homes);
+  const specialties = world.kind === "workstation" ? serviceTable : goodsTable;
   return {
     id: `comms.steward:z${String(index + 1).padStart(3, "0")}`,
     label: names[index % names.length],
     member: opts.member !== false,
     archetype: opts.archetype || "honest",
     farmstead: farm,                  // descriptive only; presence is cost-driven
-    specialty: goodsTable[index % goodsTable.length],
+    specialty: specialties[index % specialties.length],
     capability: clamp(0.45 + rand() * 0.7, 0.2, 1.15),
     stock: 1 + rand(),
     cart: false,                      // params hook for the cost model; nobody
@@ -307,6 +340,7 @@ function seedState(p) {
     events: [],
     interactions: [],
     interactionOverlay: { direct: [], evidence: [] },
+    resourceTelemetry: emptyResourceTelemetry(),
     nextId: 1,
     nextVillager: 0,
     cached: { coverage: 0, spread: 0, mean: new Map() }
@@ -338,7 +372,11 @@ function seedState(p) {
     }
   }
 
-  logEvent("rule/1", "Founding rule adopted", "Ceremony quorum, sponsor rule, and the gossip habits of the village are set.");
+  logEvent("rule/1",
+    world.kind === "workstation" ? "Host policy loaded" : "Founding rule adopted",
+    world.kind === "workstation"
+      ? "Admission, resource appraisal, and store-exchange policy are active."
+      : "Ceremony quorum, sponsor rule, and the gossip habits of the village are set.");
   runPhaseLogic(p, 0);
   assignTargets(p);
   refreshCaches();
@@ -388,6 +426,9 @@ function phaseMorning(p) {
 // trip less often and arrive with less of the phase left: that is exactly
 // how their knowledge falls behind.
 function phaseMarket(p) {
+  if (world.kind === "workstation") {
+    state.resourceTelemetry = emptyResourceTelemetry();
+  }
   for (const v of state.villagers) {
     v.atCommons = false;
     v.spot = null;
@@ -402,7 +443,14 @@ function phaseMarket(p) {
     }
   }
   const attendees = state.villagers.filter((v) => v.atMarket);
-  placeAttendees(attendees, world.market, 0.85);
+  if (world.kind === "workstation") {
+    for (const v of attendees) {
+      const node = world.resources.find((r) => r.id === v.specialty.id) || world.market;
+      v.spot = jitterAround(node, 0.025);
+    }
+  } else {
+    placeAttendees(attendees, world.market, 0.85);
+  }
   const sellers = attendees.filter((v) => v.member);
 
   for (const buyer of sellers) {
@@ -423,6 +471,28 @@ function phaseMarket(p) {
       const cheat = seller.archetype === "defector" && seller.member;
       failed = cheat ? rand() < 0.55 : rand() < 0.07;
     }
+    if (world.kind === "workstation") {
+      const demand = seller.specialty.vram || 0;
+      const telemetry = state.resourceTelemetry;
+      const resourceUse = telemetry.byResource[seller.specialty.id] || {
+        jobs: 0, failed: 0, vram: 0
+      };
+      telemetry.byResource[seller.specialty.id] = resourceUse;
+      telemetry.jobs += 1;
+      resourceUse.jobs += 1;
+      if (seller.specialty.id === "remote") telemetry.remoteCalls += 1;
+      if (demand > 0) {
+        telemetry.vramUsed += demand;
+        resourceUse.vram += demand;
+        const over = Math.max(0, telemetry.vramUsed - telemetry.vramCapacity);
+        if (over > 0 && rand() < Math.min(0.8, over / telemetry.vramCapacity)) failed = true;
+      }
+      if (seller.specialty.id === "remote" && rand() < 0.12) failed = true;
+      if (failed) {
+        telemetry.failedJobs += 1;
+        resourceUse.failed += 1;
+      }
+    }
     seller.stock = Math.max(0, seller.stock - 0.8);
     const dealIdx = addAttestation({
       type: "deal-record/1",
@@ -439,13 +509,22 @@ function phaseMarket(p) {
       outcome: failed ? "failed" : "completed"
     });
     if (failed) {
-      logEvent("deal-record/1", `${seller.label} shorted a delivery`, `${buyer.label} recorded the broken pledge at the market.`);
+      logEvent("deal-record/1",
+        world.kind === "workstation"
+          ? `${seller.label} failed a ${seller.specialty.id} request`
+          : `${seller.label} shorted a delivery`,
+        world.kind === "workstation"
+          ? `${buyer.label} recorded the failed service commitment on the resource fabric.`
+          : `${buyer.label} recorded the broken pledge at the market.`);
       if (rand() < 0.35 + p.objectionRate * 0.5) {
         addAttestation({
           type: "objection/1",
           by: buyer.id,
           target: seller.id,
-          detail: { kind: "procedural", grounds: "delivery shortfall" },
+          detail: {
+            kind: "procedural",
+            grounds: world.kind === "workstation" ? "service failure" : "delivery shortfall"
+          },
           at: world.market
         }, [buyer, ...witnesses]);
       }
@@ -456,7 +535,10 @@ function phaseMarket(p) {
         type: "endorsement/1",
         by: buyer.id,
         target: seller.id,
-        detail: { in_capacity: "market-deal", weight: "secondary" },
+        detail: {
+          in_capacity: world.kind === "workstation" ? "resource-service" : "market-deal",
+          weight: "secondary"
+        },
         at: world.market
       }, [buyer, seller, ...witnesses]);
     }
@@ -472,7 +554,10 @@ function phaseMarket(p) {
         type: "deal-record/1",
         by: helped.id,
         target: cand.id,
-        detail: { outcome: rand() < 0.92 ? "completed" : "failed", good: "labor" },
+        detail: {
+          outcome: rand() < 0.92 ? "completed" : "failed",
+          good: world.kind === "workstation" ? "host-integration" : "labor"
+        },
         at: world.market
       }, [helped, cand, ...witnesses]);
       recordInteraction("help", [helped, cand, ...witnesses], {
@@ -537,7 +622,9 @@ function phaseCommons(p) {
 
     const ceremonyIdx = addAttestation({
       type: "ceremony-record/1",
-      by: "comms.steward:zVILLAGE",
+      by: world.kind === "workstation"
+        ? "comms.steward:zHOST-CONTROLLER"
+        : "comms.steward:zVILLAGE",
       target: candidate.id,
       detail: {
         committed, sponsors: sponsors.length, apparentSponsors: sponsors.length + bonusSponsors,
@@ -570,8 +657,11 @@ function phaseCommons(p) {
           at: world.commons
         }, [candidate, ...attendees]);
       }
-      logEvent("ceremony-record/1", `${candidate.label} admitted at the commons`,
-        `${sponsors.length} sponsors, ${attendees.length} witnesses, ${objectors.length} objections. Only those present hold the record.`);
+      logEvent("ceremony-record/1",
+        world.kind === "workstation"
+          ? `${candidate.label} enrolled by the controller`
+          : `${candidate.label} admitted at the commons`,
+        `${sponsors.length} sponsors, ${attendees.length} witnesses, ${objectors.length} objections. Only participants hold the record.`);
     } else {
       candidate.failedPetitions = (candidate.failedPetitions || 0) + 1;
       for (const o of objectors) {
@@ -612,9 +702,10 @@ function phaseEvening(p) {
 }
 
 function failureReason(p, sponsors, witnesses, objections) {
-  if (sponsors < p.sponsors) return `Only ${sponsors} villagers trusted them enough to sponsor; the rule asks ${p.sponsors}.`;
-  if (witnesses < p.witnessQuorum) return `Only ${witnesses} came to witness; quorum is ${p.witnessQuorum}.`;
-  return `${objections} objections at the commons stalled it.`;
+  const people = world.kind === "workstation" ? "agents" : "villagers";
+  if (sponsors < p.sponsors) return `Only ${sponsors} ${people} trusted them enough to sponsor; the rule asks ${p.sponsors}.`;
+  if (witnesses < p.witnessQuorum) return `Only ${witnesses} participated; quorum is ${p.witnessQuorum}.`;
+  return `${objections} objections at the ${world.kind === "workstation" ? "control plane" : "commons"} stalled it.`;
 }
 
 function arrive(archetype, ap = null, adversaryType = null) {
@@ -632,10 +723,15 @@ function arrive(archetype, ap = null, adversaryType = null) {
   v.arrivedDay = state.day;
   state.villagers.push(v);
   state.byId.set(v.id, v);
-  logEvent("ceremony-record/1", `${v.label} arrived by the south road`,
+  logEvent("ceremony-record/1",
+    world.kind === "workstation" ? `${v.label} image staged` : `${v.label} arrived by the south road`,
     archetype === "defector" || archetype === "adversary"
-      ? "A well-presented newcomer. The pledges will tell."
-      : "A newcomer makes camp by the commons and waits to petition.");
+      ? (world.kind === "workstation"
+          ? "A well-formed VM image with a persistent signing identity. Its service history will tell."
+          : "A well-presented newcomer. The pledges will tell.")
+      : (world.kind === "workstation"
+          ? "A new agent waits in the staging network for controller enrollment."
+          : "A newcomer makes camp by the commons and waits to petition."));
   return v;
 }
 
@@ -914,6 +1010,6 @@ function refreshCaches() {
 }
 
 function logEvent(type, title, body) {
-  state.events.unshift({ day: state.day, phase: PHASES[state.phase].label, type, title, body });
+  state.events.unshift({ day: state.day, phase: phaseLabel(), type, title, body });
   state.events = state.events.slice(0, 40);
 }

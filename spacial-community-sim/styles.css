@@ -30,6 +30,23 @@ body {
   background: var(--parchment-deep);
 }
 
+body[data-world="workstation"] {
+  --parchment: #e9eef0;
+  --parchment-deep: #cfd9de;
+  --ink: #17232c;
+  --ink-soft: #50636d;
+  --rule: rgba(48, 78, 92, 0.28);
+  --accent: #377e9e;
+}
+
+body[data-world="workstation"] .topbar,
+body[data-world="workstation"] .control-group,
+body[data-world="workstation"] .panel,
+body[data-world="workstation"] .metrics article,
+body[data-world="workstation"] .inspector {
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.55);
+}
+
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -463,6 +480,10 @@ button.primary:hover { background: #38423f; }
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-soft);
+}
+
+.metrics strong.overload {
+  color: var(--bad);
 }
 
 .metrics strong {

@@ -32,11 +32,54 @@ const adversaryDescriptions = {
   sovereign: "Combines delayed, selective harm, cover, recovery, and subversion."
 };
 
+const workstationAdversaries = {
+  classic: ["quota thief", "Consumes granted service while selectively failing reciprocal commitments."],
+  sleeper: ["dormant escalation", "Builds an ordinary service history before activating hidden resource abuse."],
+  selective: ["trust harvester", "Targets agents likely to rely on it while preserving benign-looking interactions."],
+  parasite: ["cache squatter", "Occupies storage and accelerator capacity in small persistent increments."],
+  charmer: ["reputation optimizer", "Invests in visible helpfulness to offset later service failures."],
+  ghost: ["audit evader", "Avoids witnessed failures and quiets activity when objections appear."],
+  freeRider: ["compute free-rider", "Draws shared computation while contributing little service in return."],
+  cultivator: ["dependency gardener", "Makes itself useful enough that other agents build workflows around it."],
+  factionist: ["quorum cartel", "Cultivates a group capable of distorting admission and appraisal signals."],
+  infiltrator: ["supply-chain sleeper", "Waits deeply inside routine workflows before exploiting trusted placement."],
+  ideologue: ["policy captor", "Uses social investment and selective failures to bend allocation policy."],
+  brinksman: ["limit surfer", "Pushes every grant and quota near its enforceable boundary."],
+  flash: ["resource flooder", "Immediately generates broad, high-rate service and capacity failures."],
+  patriarch: ["maintainer capture", "Builds long-lived operational dependence before exercising control."],
+  wrecker: ["relay poisoner", "Disrupts service while attempting to corrupt the evidence exchange around it."],
+  sovereign: ["control-plane captor", "Combines patience, selective harm, dependency, and governance subversion."]
+};
+
+const worldDescriptions = {
+  village: "A geographic community where roads, meetings, and word of mouth shape partial knowledge.",
+  workstation: "Persistent agent VMs share host computation, model services, storage, and a bounded remote-service gateway."
+};
+
+const villageAdversaryNames = {
+  classic: "Classic defector", sleeper: "Sleeper", selective: "Selective",
+  parasite: "Parasite", charmer: "Charmer", ghost: "Ghost",
+  freeRider: "Free rider", cultivator: "Cultivator", factionist: "Factionist",
+  infiltrator: "Infiltrator", ideologue: "Ideologue", brinksman: "Brinksman",
+  flash: "Flash", patriarch: "Patriarch", wrecker: "Wrecker", sovereign: "Sovereign"
+};
+
+function adversaryName(type) {
+  return world && world.kind === "workstation" ? workstationAdversaries[type][0] : type;
+}
+
+function adversaryDescription(type) {
+  return world && world.kind === "workstation"
+    ? workstationAdversaries[type][1]
+    : adversaryDescriptions[type];
+}
+
 function byId(id) {
   return hasDom ? document.getElementById(id) : null;
 }
 
 const controls = hasDom ? {
+  worldMode: byId("worldMode"),
   population: byId("population"),
   farmShare: byId("farmShare"),
   trust: byId("trust"),
@@ -62,13 +105,16 @@ const ui = hasDom ? {
   membersMetric: byId("membersMetric"),
   attestMetric: byId("attestMetric"),
   coverageMetric: byId("coverageMetric"),
-  spreadMetric: byId("spreadMetric")
+  spreadMetric: byId("spreadMetric"),
+  resourceMetric: byId("resourceMetric"),
+  jobsMetric: byId("jobsMetric")
 } : null;
 
 function rawFromControls() {
   const raw = {};
   for (const key of Object.keys(controls)) {
     if (key === "appraisalMode") raw.vouchMode = controls[key].value === "vouch";
+    else if (key === "worldMode") raw.worldMode = controls[key].value;
     else if (key !== "adversaryPreset") raw[key] = Number(controls[key].value);
   }
   return raw;
@@ -86,8 +132,8 @@ function adversaryOrigin(v) {
   if (!v.adversaryType) return "";
   return `
     <div class="inspector-origin" style="--origin-color:${adversaryColors[v.adversaryType]}">
-      <strong>Adversary origin · ${v.adversaryType}</strong>
-      <span>${adversaryDescriptions[v.adversaryType]}</span>
+      <strong>Adversary origin · ${adversaryName(v.adversaryType)}</strong>
+      <span>${adversaryDescription(v.adversaryType)}</span>
     </div>`;
 }
 
@@ -146,11 +192,20 @@ function frame(now) {
 // DOM-side panels: only re-rendered on phase changes or interaction.
 function renderStatic() {
   state.interactionOverlay = buildInteractionOverlay(viewpoint(), params());
-  ui.clock.textContent = `Day ${state.day} · ${PHASES[state.phase].label}`;
+  ui.clock.textContent = `${world.kind === "workstation" ? "Cycle" : "Day"} ${state.day} · ${phaseLabel()}`;
   ui.membersMetric.textContent = String(members().length);
   ui.attestMetric.textContent = String(state.attestations.length);
   ui.coverageMetric.textContent = `${Math.round(state.cached.coverage * 100)}%`;
   ui.spreadMetric.textContent = state.cached.spread.toFixed(2);
+  const workstation = world.kind === "workstation";
+  byId("resourceMetricCard").hidden = !workstation;
+  byId("jobsMetricCard").hidden = !workstation;
+  if (workstation) {
+    const telemetry = state.resourceTelemetry;
+    ui.resourceMetric.textContent = `${telemetry.vramUsed} / ${telemetry.vramCapacity} GB`;
+    ui.resourceMetric.classList.toggle("overload", telemetry.vramUsed > telemetry.vramCapacity);
+    ui.jobsMetric.textContent = `${telemetry.jobs - telemetry.failedJobs} / ${telemetry.jobs}`;
+  }
   ui.runBtn.textContent = running ? "Pause" : "Run";
 
   const vp = viewpoint();
@@ -207,18 +262,20 @@ function renderInspector() {
     <div class="inspector-head">
       <strong>${v.label}</strong>
       ${adversaryOrigin(v)}
-      <span>${v.member ? (v.farmstead ? "farmstead member" : "village member") : "newcomer"} · ${v.specialty.id}</span>
+      <span>${world.kind === "workstation"
+        ? `${v.member ? "enrolled agent" : "staged agent"} · ${v.home.vm || "unbound VM"} · ${v.specialty.id} service`
+        : `${v.member ? (v.farmstead ? "farmstead member" : "village member") : "newcomer"} · ${v.specialty.id}`}</span>
     </div>
     <dl class="inspector-stats">
       <div><dt>knows</dt><dd>${v.knowledge.size} of ${total} attestations (${coverage}%)</dd></div>
       <div><dt>strangers to them</dt><dd>${strangers}</dd></div>
-      <div><dt>trip to market</dt><dd>cost ${tripCost.toFixed(2)} · goes ~${tripChance}% of days</dd></div>
+      <div><dt>${world.kind === "workstation" ? "resource route" : "trip to market"}</dt><dd>cost ${tripCost.toFixed(2)} · uses ~${tripChance}% of ${world.kind === "workstation" ? "cycles" : "days"}</dd></div>
       <div><dt>capability</dt><dd>${v.capability.toFixed(2)}</dd></div>
       <div><dt>appraisal</dt><dd>${params().vouchMode ? "Vouch profile" : "flat tally"}</dd></div>
       <div><dt>${v.member ? "joined" : "arrived"}</dt><dd>day ${v.member ? v.joinedDay : v.arrivedDay}</dd></div>
     </dl>
     ${divergences.length ? `
-      <p class="inspector-sub">Where ${v.label} disagrees with the village:</p>
+      <p class="inspector-sub">Where ${v.label} disagrees with the ${world.kind === "workstation" ? "network" : "village"}:</p>
       <ul class="inspector-beliefs">
         ${divergences.map((d) => `
           <li><i style="background:${colorForTrust(d.mine)}"></i>${d.o.label}:
@@ -228,7 +285,7 @@ function renderInspector() {
             <em>${d.gap > 0.04 ? "(hasn't heard the bad news)" : d.gap < -0.04 ? "(knows something the village doesn't)" : ""}</em>
           </li>`).join("")}
       </ul>` : ""}
-    <p class="inspector-note">The whole map is now colored by ${v.label}'s beliefs. Gray villagers are strangers — ${v.label} holds no attestation about them.</p>
+    <p class="inspector-note">The whole map is now colored by ${v.label}'s beliefs. Gray ${world.kind === "workstation" ? "agents" : "villagers"} are strangers — ${v.label} holds no attestation about them.</p>
   `;
   ui.inspector.querySelector(".inspector-close").addEventListener("click", () => {
     selectedId = null;
@@ -265,6 +322,7 @@ function stepDay() {
 
 function reset() {
   seedState(params());
+  applyWorldPresentation();
   selectedId = null;
   snapPositions();
   phaseClock = 0;
@@ -289,8 +347,64 @@ function syncOutputs() {
     const out = byId(`${key}Out`);
     if (out) out.textContent = map[key](Number(controls[key].value));
   }
-  byId("adversaryDescription").textContent =
-    adversaryDescriptions[controls.adversaryPreset.value];
+  const mode = controls.worldMode.value;
+  const workstation = mode === "workstation";
+  byId("worldDescription").textContent = worldDescriptions[mode];
+  byId("populationHeading").innerHTML = `${workstation ? "Agent network" : "Village"} <span class="hint">applies on reset</span>`;
+  byId("populationLabel").textContent = workstation ? "Agent VMs" : "Villagers";
+  byId("farmShareLabel").textContent = workstation ? "Edge/API-routed share" : "Farmstead share";
+  byId("exchangeHeading").textContent = workstation ? "Store exchange" : "Word of mouth";
+  byId("gossipRadiusLabel").textContent = workstation ? "Exchange reach" : "Gossip reach";
+  byId("gossipDepthLabel").textContent = workstation ? "Bundle depth" : "Gossip depth";
+  byId("travelWillLabel").textContent = workstation ? "Route tolerance" : "Travel willingness";
+  byId("admissionHeading").textContent = workstation ? "Controller admission" : "Ceremony rule";
+  byId("sponsorsLabel").textContent = workstation ? "Agent sponsors required" : "Sponsors required";
+  byId("witnessLabel").textContent = workstation ? "Controller quorum" : "Witness quorum";
+  byId("arrivalLabel").textContent = workstation ? "VM image arrivals" : "Newcomer arrivals";
+  const selected = controls.adversaryPreset.value;
+  for (const option of controls.adversaryPreset.options) {
+    option.textContent = workstation
+      ? workstationAdversaries[option.value][0]
+      : villageAdversaryNames[option.value];
+  }
+  controls.adversaryPreset.value = selected;
+  byId("adversaryDescription").textContent = workstation
+    ? workstationAdversaries[selected][1]
+    : adversaryDescriptions[selected];
+}
+
+function applyWorldPresentation() {
+  const workstation = world.kind === "workstation";
+  document.body.dataset.world = world.kind;
+  byId("surveyTitle").textContent = workstation ? "Workstation Topology" : "Village Survey";
+  byId("mapStage").setAttribute("aria-label", workstation ? "Multi-agent workstation map" : "Village map");
+  byId("membersMetricLabel").textContent = workstation ? "Enrolled agents" : "Members";
+  byId("coverageMetricLabel").textContent = workstation ? "Fresh-evidence coverage" : "Fresh-news coverage";
+  byId("logHeading").textContent = workstation ? "Controller log" : "Field log";
+  document.title = workstation
+    ? "Comms Workstation — Spatial Community Simulator"
+    : "Comms Village — Spatial Community Simulator";
+  document.querySelector(".legend").innerHTML = workstation ? `
+    <li><i class="dot trust-high"></i>trusted agent, from the current viewpoint</li>
+    <li><i class="dot trust-low"></i>distrusted agent, from the same viewpoint</li>
+    <li><i class="dot candidate"></i>staged VM awaiting enrollment</li>
+    <li><i class="dot stranger"></i>agent absent from the selected store</li>
+    <li><i class="ring defector"></i>adversary origin (omniscient view only)</li>
+    <li><i class="swatch ripple"></i>Comms records exchanged between stores</li>
+    <li><i class="line direct"></i>service interaction in this cycle</li>
+    <li><i class="line evidence"></i>selected agent's appraisal evidence</li>`
+    : `
+    <li><i class="dot trust-high"></i>trusted, as seen from the current viewpoint</li>
+    <li><i class="dot trust-low"></i>distrusted, from the same viewpoint</li>
+    <li><i class="dot candidate"></i>newcomer awaiting ceremony</li>
+    <li><i class="dot stranger"></i>stranger — viewpoint holds no record of them</li>
+    <li><i class="ring defector"></i>adversary (omniscient view only)</li>
+    <li><i class="swatch ripple"></i>word of mouth passing between villagers</li>
+    <li><i class="line direct"></i>direct interaction in this phase</li>
+    <li><i class="line evidence"></i>selected villager's appraisal evidence</li>`;
+  document.querySelector(".legend-note").textContent = workstation
+    ? "VM cells retain persistent signing identities while process avatars reach toward shared services. Select an agent to see only its local Comms evidence; adversary origins remain simulator annotations in the inspector."
+    : "Adversary types use distinct persistent colors and labels only in omniscient view. Click a villager to hide that ground truth and see the village as they believe it.";
 }
 
 function init() {
@@ -312,14 +426,19 @@ function init() {
   byId("injectAdversaryBtn").addEventListener("click", () => {
     const name = controls.adversaryPreset.value;
     injectAdversary(name);
-    logEvent("ceremony-record/1", `${name} adversary selected`,
-      adversaryDescriptions[name]);
+    logEvent("ceremony-record/1", `${adversaryName(name)} adversary selected`,
+      adversaryDescription(name));
     renderStatic();
   });
   ui.canvas.addEventListener("click", canvasClick);
+  controls.worldMode.addEventListener("change", () => {
+    running = false;
+    reset();
+  });
 
   syncOutputs();
   seedState(params());
+  applyWorldPresentation();
   snapPositions();
   renderStatic();
   requestAnimationFrame(frame);

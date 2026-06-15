@@ -8,6 +8,32 @@ under a seeded PRNG. Open `index.html` directly or serve:
 python3 -m http.server 8080
 ```
 
+## Two complementary maps
+
+The **Map** control switches between two worlds that share the same Comms,
+Vouch, admission, adversary, and viewpoint mechanics:
+
+- **Village Survey** makes physical travel, meetings, and word of mouth shape
+  what each villager can know.
+- **Workstation Topology** places persistent signing agents in bounded VM
+  cells around shared host services. Active process avatars remain tethered
+  to their VM cores while they request language, vision, speech, embedding,
+  CPU, storage, or remote services.
+
+The workstation map is not a cosmetic reskin. It has a 24 GB accelerator
+envelope, service-specific model profiles, remote-call failures, host buses,
+staging and admission-controller regions, resource telemetry, and its own
+adversary vocabulary. A `sovereign` behavioral preset, for example, appears
+there as a **control-plane captor**. The behavioral parameters remain shared
+so the two maps can be compared without giving either one a different trust
+system.
+
+Run its focused smoke test without invoking the large adversary matrix:
+
+```sh
+cat world.js sim.js render.js ui.js workstation-smoke-test.js | node
+```
+
 ## What it models
 
 The previous simulator gave every steward a global trust scalar and an

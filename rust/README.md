@@ -53,6 +53,25 @@ if anything fails. A corrupted member signature leaves the member *set* intact,
 so `verify` still passes while `inspect` catches it — run `inspect` when you
 care about authenticity, not just completeness.
 
+## Vouch candidate
+
+The binary also carries the candidate Layer-4 reference evaluator. Unlike the
+commands above, `vouch` returns a viewer- and policy-relative judgment:
+
+```sh
+comms-verify vouch evidence.bundle \
+  --policy comms.attest:z... \
+  --subject comms.steward:z... \
+  --purpose admission \
+  --as-of 2026-06-14T12:00:00Z \
+  --json
+```
+
+Add `--receipt-out judgment.cbor --key steward.json` to emit an optional signed
+`vouch-judgment/1` receipt. The receipt preserves the query, policy, exact
+store-view digest, outcome, and evidence IDs; it does not prove the judgment
+was wise. See `docs/vouch.spec.1.0.md`.
+
 ## Keys
 
 `seal`/`pack --seal` sign with a **steward key file**, the same JSON the Python

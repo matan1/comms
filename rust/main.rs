@@ -15,6 +15,7 @@ use comms_core::bundle::{
 };
 use comms_core::personal_steward_id;
 use comms_core::steward::Attestation;
+use comms_core::vouch::{evaluate, judgment_receipt, Evaluation, Query, ENGINE};
 use ed25519_dalek::SigningKey;
 
 fn main() {
@@ -35,6 +36,7 @@ fn main() {
         Some("pack") => cmd_pack(&argv[1..]),
         Some("extract") => cmd_extract(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
+        Some("vouch") => cmd_vouch(&argv[1..]),
         // Back-compat: `comms-verify <bundle.cbor>` (no subcommand) == verify.
         Some(_) => cmd_verify(argv),
     }
@@ -52,6 +54,8 @@ fn usage() {
     eprintln!("  pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]");
     eprintln!("  extract <bundle> --out <dir>     write members and media to files");
     eprintln!("  mint    --out <key.json> [--label L]   generate a steward key for sealing");
+    eprintln!("  vouch   <bundle> --policy ID --subject ID --purpose S --as-of T [--json]");
+    eprintln!("          [--community ID] [--receipt-out P --key K]");
     eprintln!();
     eprintln!("A 'valid' result is layer 2/3 (verified + resolvable). Trust is yours.");
 }
@@ -470,6 +474,99 @@ fn cmd_mint(args: &[String]) {
     restrict_permissions(out);
     println!("minted steward {id}");
     println!("key written to {out} (mode 0600); keep the seed secret");
+}
+
+// ---- vouch -----------------------------------------------------------------
+
+fn cmd_vouch(args: &[String]) {
+    let o = parse_opts(args);
+    let path = o
+        .positionals
+        .first()
+        .map(String::as_str)
+        .unwrap_or_else(|| die("usage: comms-verify vouch <bundle> --policy ID --subject ID --purpose S --as-of T"));
+    let bundle = read_bundle(path);
+    let store: HashMap<String, Attestation> = bundle
+        .members()
+        .into_iter()
+        .map(|a| (a.id(), a))
+        .collect();
+    let query = Query {
+        subject: o.require("--subject").to_owned(),
+        purpose: o.require("--purpose").to_owned(),
+        community: o.get("--community").map(str::to_owned),
+        as_of: o.require("--as-of").to_owned(),
+    };
+    let result = evaluate(&store, o.require("--policy"), query)
+        .unwrap_or_else(|e| die(e.to_string()));
+    if o.has("--json") {
+        print!("{}", vouch_json(&result));
+    } else {
+        print_vouch(&result);
+    }
+    if let Some(out) = o.get("--receipt-out") {
+        let sk = load_key(o.require("--key"));
+        let receipt = judgment_receipt(&result, &sk, &result.query.as_of);
+        write_out(out, &receipt.to_cbor());
+        eprintln!("receipt: {} -> {out}", receipt.id());
+    }
+}
+
+fn print_vouch(r: &Evaluation) {
+    println!("outcome: {}", r.outcome.as_str());
+    println!("subject: {}", r.query.subject);
+    println!("purpose: {}", r.query.purpose);
+    println!("policy: {}", r.policy_id);
+    println!("store view: {}", r.store_view);
+    println!("positive issuers: {}", r.positive_issuers.len());
+    println!("endorsers: {}", r.endorsers.len());
+    println!("negative issuers: {}", r.negative_issuers.len());
+    if !r.unresolved.is_empty() {
+        println!("unresolved:");
+        for id in &r.unresolved {
+            println!("  {id}");
+        }
+    }
+    println!("evidence:");
+    for e in &r.evidence {
+        println!(
+            "  {} {} {} [{}] — {}",
+            if e.counted { "✓" } else { "·" },
+            e.class,
+            e.id,
+            e.issuer.as_deref().unwrap_or("no issuer"),
+            e.reason
+        );
+    }
+}
+
+fn vouch_json(r: &Evaluation) -> String {
+    let out = serde_json::json!({
+        "engine": ENGINE,
+        "query": {
+            "subject": r.query.subject,
+            "purpose": r.query.purpose,
+            "community": r.query.community,
+            "as_of": r.query.as_of,
+        },
+        "policy": r.policy_id,
+        "store_view": r.store_view,
+        "outcome": r.outcome.as_str(),
+        "positive_issuers": r.positive_issuers,
+        "negative_issuers": r.negative_issuers,
+        "endorsers": r.endorsers,
+        "unresolved": r.unresolved,
+        "paths": r.paths,
+        "evidence": r.evidence.iter().map(|e| serde_json::json!({
+            "id": e.id,
+            "claim_type": e.claim_type,
+            "issuer": e.issuer,
+            "class": e.class,
+            "counted": e.counted,
+            "reason": e.reason,
+        })).collect::<Vec<_>>(),
+    });
+    format!("{}\n", serde_json::to_string_pretty(&out).unwrap())
 }
 
 fn restrict_permissions(path: &str) {

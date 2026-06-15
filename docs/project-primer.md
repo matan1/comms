@@ -74,6 +74,8 @@ protocol implementation and vice versa.
 - `docs/transaction-visualization-plan.md` — deferred plan for a future
   simulator activity/transaction visualization.
 - `docs/agent-brief.template.md` — template for per-session agent briefs.
+- `docs/vouch-requirements.1.0.md`, `docs/vouch.spec.1.0.md` — candidate
+  Layer-4 trust requirements and specification.
 - `docs/comparative-architecture.md` — project boundaries, adjacent standards,
   interoperability decisions, and the recommended architecture roadmap.
 - `docs/appraising-interpreters-requirements.1.0.md` — candidate requirements
@@ -91,9 +93,10 @@ this repo despite the generic VM tooling notes — those are not relevant here.
 - Note from the last assessment: on the bare VM, `cbor2` and `PyNaCl` import but
   `blake3` was missing and `pip` was not installed for the system interpreter.
   Install deps into a venv before running anything that touches hashing.
-- There are currently **no automated tests** and **no CLI**. A reference
-  end-to-end demo lived in a sibling `coopete_demo` directory (not present in
-  this checkout).
+- Automated tests live under `tests/`; run `python -m pytest -q` from an
+  environment containing `requirements.txt` plus `pytest`.
+- The portable Rust CLI is `rust/target/release/comms-verify`. It handles
+  bundles and the candidate Vouch evaluator; see `rust/README.md`.
 
 ### Browser demo
 
@@ -104,6 +107,12 @@ this repo despite the generic VM tooling notes — those are not relevant here.
 - Sanity check after JS edits:
   ```sh
   node --check community-sim/app.js
+  ```
+- Spatial simulator and Vouch acceptance harness:
+  ```sh
+  cat spacial-community-sim/world.js spacial-community-sim/sim.js \
+      spacial-community-sim/render.js \
+      spacial-community-sim/vouch-adversary-test.js | node
   ```
 - For logic-level testing without a browser, a DOM-stub harness under Node can
   load `app.js` in a `vm` context (function declarations become context

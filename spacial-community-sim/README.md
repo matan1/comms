@@ -119,6 +119,23 @@ cat world.js sim.js render.js ui.js harness-test.js | node
 `normalizeParams` still accepts the old `marketAttend` key as an alias for
 `travelWill`, so existing harness scenarios keep running.
 
+## Vouch research harness
+
+The simulator now carries the original model's 16 adversary presets and an
+informative Vouch profile alongside the legacy flat tally. Vouch counts
+distinct direct interaction issuers, caps repetition, treats objections as
+contestation, and lets buyers stop relying on a steward once two independent
+failures reach their local store.
+
+Run the full comparison (25 deterministic seeds per preset, 120 days):
+
+```sh
+cat world.js sim.js render.js vouch-adversary-test.js | node
+```
+
+For a fast smoke run, set `VOUCH_SEEDS=3`. The harness reports harmful
+post-admission deals, adversary admission, and honest-newcomer admission cost.
+
 ## Deliberate simplifications (and where this goes)
 
 - One community; the farmstead is distance — now literally. The next tier

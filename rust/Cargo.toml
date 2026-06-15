@@ -31,3 +31,7 @@ path = "main.rs"
 [[test]]
 name = "golden"
 path = "golden.rs"
+
+[[test]]
+name = "vouch_golden"
+path = "vouch_golden.rs"

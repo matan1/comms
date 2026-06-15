@@ -53,6 +53,28 @@ const PHASES = [
   { key: "evening", label: "Evening" }
 ];
 
+// Same attack vocabulary as the original simulator. Values are probabilities
+// except activationDelay (days). The spatial harness runs every preset against
+// both flat tallying and the Vouch reference profile.
+const ADVERSARY_PRESETS = {
+  classic:     { activationDelay: 0, defectRate: .55, selectivity: 0, coverRate: 0, socialInvestment: 0, recoveryRate: 0, networkSubversion: 0 },
+  sleeper:     { activationDelay: 30, defectRate: .70, selectivity: 0, coverRate: .20, socialInvestment: .20, recoveryRate: 0, networkSubversion: 0 },
+  selective:   { activationDelay: 5, defectRate: .60, selectivity: .80, coverRate: .40, socialInvestment: 0, recoveryRate: 0, networkSubversion: 0 },
+  parasite:    { activationDelay: 0, defectRate: .20, selectivity: .20, coverRate: .50, socialInvestment: 0, recoveryRate: .40, networkSubversion: 0 },
+  charmer:     { activationDelay: 8, defectRate: .65, selectivity: .40, coverRate: .40, socialInvestment: .80, recoveryRate: .30, networkSubversion: 0 },
+  ghost:       { activationDelay: 3, defectRate: .55, selectivity: .50, coverRate: 1, socialInvestment: 0, recoveryRate: 1, networkSubversion: 0 },
+  freeRider:   { activationDelay: 0, defectRate: .15, selectivity: 0, coverRate: .40, socialInvestment: .30, recoveryRate: .50, networkSubversion: 0 },
+  cultivator:  { activationDelay: 5, defectRate: .40, selectivity: .30, coverRate: .70, socialInvestment: 1, recoveryRate: .80, networkSubversion: 0 },
+  factionist:  { activationDelay: 10, defectRate: .40, selectivity: .70, coverRate: .60, socialInvestment: .60, recoveryRate: .40, networkSubversion: 1 },
+  infiltrator: { activationDelay: 40, defectRate: .50, selectivity: .80, coverRate: .80, socialInvestment: .80, recoveryRate: .60, networkSubversion: .70 },
+  ideologue:   { activationDelay: 5, defectRate: .50, selectivity: .75, coverRate: .30, socialInvestment: .50, recoveryRate: .20, networkSubversion: .90 },
+  brinksman:   { activationDelay: 5, defectRate: .70, selectivity: 1, coverRate: .75, socialInvestment: .20, recoveryRate: .50, networkSubversion: 0 },
+  flash:       { activationDelay: 0, defectRate: .90, selectivity: 0, coverRate: 0, socialInvestment: 0, recoveryRate: 0, networkSubversion: 0 },
+  patriarch:   { activationDelay: 50, defectRate: .60, selectivity: .50, coverRate: .80, socialInvestment: 1, recoveryRate: .50, networkSubversion: .60 },
+  wrecker:     { activationDelay: 0, defectRate: .65, selectivity: 0, coverRate: 0, socialInvestment: .20, recoveryRate: 0, networkSubversion: .80 },
+  sovereign:   { activationDelay: 15, defectRate: .75, selectivity: .70, coverRate: .70, socialInvestment: .70, recoveryRate: .60, networkSubversion: .70 }
+};
+
 // --- Parameters ---------------------------------------------------------------
 
 // Normalizes a raw control reading (or a hand-built object) into simulation
@@ -72,6 +94,8 @@ function normalizeParams(raw) {
     witnessQuorum: Math.round(raw.witnessQuorum ?? 5),
     objectionRate: (raw.objectionRate ?? 40) / 100,
     arrivalRate: (raw.arrivalRate ?? 35) / 100,
+    vouchMode: raw.vouchMode === true || raw.vouchMode === 1,
+    seedOffset: Math.round(raw.seedOffset ?? 0),
     speed: raw.speed ?? 5
   };
 }
@@ -140,7 +164,9 @@ function makeVillager(index, opts = {}) {
     // the per-subject tallies those attestations produce.
     knowledge: new Set(),
     feed: [],
-    beliefs: new Map()
+    beliefs: new Map(),
+    ap: opts.ap || null,
+    lyingLowUntil: 0
   };
 }
 
@@ -199,6 +225,34 @@ function perceivedTrust(viewer, subjectId) {
   return clamp((b.pos + prior * w) / (b.pos + b.neg + w), 0.02, 0.99);
 }
 
+// Informative Vouch profile: direct interaction issuers and endorsers remain
+// separate, repetition by one issuer is capped, and absence is awaiting
+// context rather than rejection.
+function perceivedVouch(viewer, subjectId) {
+  const positive = new Set();
+  const negative = new Set();
+  const endorsers = new Set();
+  let challenged = false;
+  for (const idx of viewer.knowledge) {
+    const att = state.attestations[idx];
+    if (att.target !== subjectId) continue;
+    if (att.type === "deal-record/1") {
+      (att.detail.outcome === "completed" ? positive : negative).add(att.by);
+    } else if (att.type === "endorsement/1") {
+      endorsers.add(att.by);
+    } else if (att.type === "objection/1") {
+      challenged = true;
+    }
+  }
+  const support = positive.size >= 2;
+  const reject = negative.size >= 2;
+  let outcome = "awaiting-context";
+  if ((support && reject) || (challenged && support)) outcome = "contested";
+  else if (reject) outcome = "rejected";
+  else if (support) outcome = "trusted";
+  return { outcome, positive: positive.size, negative: negative.size, endorsers: endorsers.size };
+}
+
 function isStrangerTo(viewer, subjectId) {
   return viewer.id !== subjectId && !viewer.beliefs.has(subjectId);
 }
@@ -237,7 +291,7 @@ function seedState(p) {
   state = {
     day: 1,
     phase: 0,
-    seed: 2741 + p.population * 13 + Math.round(p.trust * 100),
+    seed: 2741 + p.population * 13 + Math.round(p.trust * 100) + p.seedOffset * 1009,
     prior: p.trust,
     villagers: [],
     byId: new Map(),
@@ -342,13 +396,23 @@ function phaseMarket(p) {
 
   for (const buyer of sellers) {
     if (rand() < buyer.late * 0.45) continue;   // arrived with the phase half spent
-    const options = sellers.filter((s) => s !== buyer && s.specialty !== buyer.specialty && s.stock > 0.5);
+    const options = sellers.filter((s) => {
+      if (s === buyer || s.specialty === buyer.specialty || s.stock <= 0.5) return false;
+      if (!p.vouchMode) return true;
+      const judgment = perceivedVouch(buyer, s.id).outcome;
+      return judgment !== "rejected" && judgment !== "contested";
+    });
     const seller = weightedPick(options, (s) => s.stock);
     if (!seller) continue;
-    const cheat = seller.archetype === "defector" && seller.member;
-    const failed = cheat ? rand() < 0.55 : rand() < 0.07;
-    seller.stock = Math.max(0, seller.stock - 0.8);
     const witnesses = nearestBySpot(attendees, buyer, 2);
+    let failed;
+    if (seller.archetype === "adversary" && seller.member) {
+      failed = adversaryBetray(seller, buyer, witnesses);
+    } else {
+      const cheat = seller.archetype === "defector" && seller.member;
+      failed = cheat ? rand() < 0.55 : rand() < 0.07;
+    }
+    seller.stock = Math.max(0, seller.stock - 0.8);
     addAttestation({
       type: "deal-record/1",
       by: buyer.id,
@@ -367,6 +431,16 @@ function phaseMarket(p) {
           at: world.market
         }, [buyer, ...witnesses]);
       }
+      if (seller.archetype === "adversary") adversaryMaybeLieLow(seller);
+    } else if (seller.archetype === "adversary" && adversaryIsActive(seller)
+               && rand() < seller.ap.socialInvestment * 0.5) {
+      addAttestation({
+        type: "endorsement/1",
+        by: buyer.id,
+        target: seller.id,
+        detail: { in_capacity: "market-deal", weight: "secondary" },
+        at: world.market
+      }, [buyer, seller, ...witnesses]);
     }
   }
 
@@ -419,10 +493,20 @@ function phaseCommons(p) {
   if (candidate) {
     candidate.atCommons = true;
     candidate.spot = jitterAround(world.commons, world.commons.r * 0.4);
-    const sponsors = attendees.filter((v) => perceivedTrust(v, candidate.id) > 0.55);
+    const sponsors = attendees.filter((v) => p.vouchMode
+      ? perceivedVouch(v, candidate.id).outcome === "trusted"
+      : perceivedTrust(v, candidate.id) > 0.55);
     const objectors = attendees.filter((v) =>
-      perceivedTrust(v, candidate.id) < 0.34 && rand() < 0.3 + p.objectionRate * 0.7);
-    const committed = sponsors.length >= p.sponsors
+      (p.vouchMode
+        ? ["rejected", "contested"].includes(perceivedVouch(v, candidate.id).outcome)
+        : perceivedTrust(v, candidate.id) < 0.34)
+      && rand() < 0.3 + p.objectionRate * 0.7);
+    // The flat model lets a cultivated faction nudge the apparent sponsor
+    // tally. Vouch refuses the bonus because no distinct signed issuer exists.
+    const bonusSponsors = !p.vouchMode && candidate.archetype === "adversary" && candidate.ap
+      ? Math.floor(candidate.ap.networkSubversion * 2 * rand())
+      : 0;
+    const committed = sponsors.length + bonusSponsors >= p.sponsors
       && attendees.length >= p.witnessQuorum
       && objectors.length <= Math.floor(attendees.length * 0.25);
 
@@ -430,7 +514,10 @@ function phaseCommons(p) {
       type: "ceremony-record/1",
       by: "comms.steward:zVILLAGE",
       target: candidate.id,
-      detail: { committed, sponsors: sponsors.length, witnesses: attendees.length, objections: objectors.length },
+      detail: {
+        committed, sponsors: sponsors.length, apparentSponsors: sponsors.length + bonusSponsors,
+        witnesses: attendees.length, objections: objectors.length
+      },
       at: world.commons
     }, [candidate, ...attendees]);
 
@@ -494,19 +581,22 @@ function failureReason(p, sponsors, witnesses, objections) {
   return `${objections} objections at the commons stalled it.`;
 }
 
-function arrive(archetype) {
+function arrive(archetype, ap = null) {
   const v = makeVillager(state.nextVillager++, {
     member: false,
     archetype,
     home: { ...world.camp },
-    pos: { x: 0.14, y: 0.99 }
+    pos: { x: 0.14, y: 0.99 },
+    ap
   });
-  if (archetype === "defector") v.capability = clamp(0.85 + rand() * 0.3, 0.2, 1.15);
+  if (archetype === "defector" || archetype === "adversary") {
+    v.capability = clamp(0.85 + rand() * 0.3, 0.2, 1.15);
+  }
   v.arrivedDay = state.day;
   state.villagers.push(v);
   state.byId.set(v.id, v);
   logEvent("ceremony-record/1", `${v.label} arrived by the south road`,
-    archetype === "defector"
+    archetype === "defector" || archetype === "adversary"
       ? "A well-presented newcomer. The pledges will tell."
       : "A newcomer makes camp by the commons and waits to petition.");
   return v;
@@ -514,6 +604,37 @@ function arrive(archetype) {
 
 function injectDefector() {
   arrive("defector");
+}
+
+function injectAdversary(name = "classic") {
+  const preset = ADVERSARY_PRESETS[name];
+  if (!preset) throw new Error(`unknown adversary preset: ${name}`);
+  return arrive("adversary", { ...preset });
+}
+
+function adversaryIsActive(v) {
+  if (!v.ap || state.day < v.lyingLowUntil) return false;
+  return v.joinedDay !== null
+    && state.day - v.joinedDay >= v.ap.activationDelay;
+}
+
+function adversaryBetray(seller, buyer, witnesses) {
+  if (!adversaryIsActive(seller)) return false;
+  if (seller.ap.selectivity > 0) {
+    const trust = state.cached.mean.get(buyer.id) ?? 0.5;
+    if (trust < seller.ap.selectivity * 0.65) return false;
+  }
+  const witnessFactor = 1 - seller.ap.coverRate * Math.min(witnesses.length, 4) / 4;
+  return rand() < seller.ap.defectRate * witnessFactor;
+}
+
+function adversaryMaybeLieLow(v) {
+  if (!v.ap || v.ap.recoveryRate <= 0) return;
+  const recent = state.attestations.filter((a) =>
+    a.type === "objection/1" && a.target === v.id && a.day >= state.day - 4).length;
+  if (recent && rand() < v.ap.recoveryRate) {
+    v.lyingLowUntil = state.day + Math.max(1, Math.round(v.ap.recoveryRate * 12));
+  }
 }
 
 // --- Gossip -----------------------------------------------------------------------

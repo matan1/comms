@@ -1,0 +1,24 @@
+{
+  "format": "comms-vouch-test-vectors/1",
+  "engine": "comms-core-vouch/0.1.0",
+  "as_of": "2026-06-14T12:00:00Z",
+  "cases": [
+    {"name": "direct trust", "expected": "trusted"},
+    {"name": "independent negative reports", "expected": "rejected"},
+    {"name": "partial store", "expected": "awaiting-context"},
+    {"name": "future and expired evidence", "expected": "awaiting-context"},
+    {"name": "challenged decisive evidence", "expected": "contested"},
+    {"name": "issuer withdrawal", "expected": "awaiting-context"},
+    {"name": "issuer reaffirmation", "expected": "trusted"},
+    {"name": "disposition fork", "expected": "contested"},
+    {"name": "endorsement farming", "expected": "awaiting-context"},
+    {"name": "bounded independent paths", "expected": "trusted"},
+    {"name": "path cycle", "expected": "no additional weight"},
+    {"name": "generic succession subject", "expected": "trusted"}
+  ],
+  "receipt": {
+    "case": "direct trust",
+    "attestation_id": "comms.attest:zBPaFoFSpecvHM2kaGGSDpJ4JzWBwGBh71VD5KTqGLeGR"
+  },
+  "note": "Executable construction and byte-stability checks are in rust/vouch_golden.rs."
+}

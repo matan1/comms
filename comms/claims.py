@@ -203,3 +203,65 @@ def action_record(*, agent: str, action: str, outcome: str,
         "outcome": outcome,
         "detail": detail or {},
     }
+
+
+# ---- Vouch layer (viewer-relative trust policy) ----
+
+def vouch_policy(*, community: str, name: str, purposes: list[dict],
+                 anchors: list[str] | None = None,
+                 description: str | None = None) -> dict:
+    """A declarative Layer-4 policy.
+
+    ``purposes`` is deliberately data, not executable code. Each entry names a
+    purpose and its evidence thresholds; Vouch evaluators reject operators they
+    do not understand rather than guessing.
+    """
+    c = {
+        "t": "vouch-policy/1",
+        "community": community,
+        "name": name,
+        "purposes": purposes,
+        "anchors": anchors or [],
+    }
+    if description:
+        c["description"] = description
+    return c
+
+
+def vouch_disposition(*, target: str, state: str,
+                      reason: str | None = None) -> dict:
+    """Activate, withdraw, or reaffirm one prior Vouch input.
+
+    This does not revoke the target's signature. It is a new signed statement
+    whose authority is evaluated relative to the issuer and selected policy.
+    """
+    if state not in {"active", "inactive", "reaffirmed"}:
+        raise ValueError("state must be active, inactive, or reaffirmed")
+    c = {"t": "vouch-disposition/1", "target": target, "state": state}
+    if reason:
+        c["reason"] = reason
+    return c
+
+
+def vouch_judgment(*, subject: str, purpose: str, policy: str, as_of: str,
+                   outcome: str, store_view: str, engine: str,
+                   evidence: list[str], unresolved: list[str] | None = None,
+                   community: str | None = None) -> dict:
+    """A portable receipt for a computed judgment, not proof it is correct."""
+    if outcome not in {"trusted", "rejected", "contested", "awaiting-context"}:
+        raise ValueError("unrecognized Vouch outcome")
+    c = {
+        "t": "vouch-judgment/1",
+        "subject": subject,
+        "purpose": purpose,
+        "policy": policy,
+        "as_of": as_of,
+        "outcome": outcome,
+        "store_view": store_view,
+        "engine": engine,
+        "evidence": evidence,
+        "unresolved": unresolved or [],
+    }
+    if community:
+        c["community"] = community
+    return c

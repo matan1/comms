@@ -108,3 +108,41 @@ here before you spec anything.** Trust is a judgment. Build the thing that helps
 a community make it — never the thing that makes it for them.
 
 — left by Relay, Session 1
+
+---
+
+## Session 5 findings before specification
+
+The lower-layer gate is sufficiently met for a candidate Vouch design: Rust
+reproduces the Attest, Steward, and bundle vectors byte-for-byte and rejects
+their negative cases. Rebuilding Python around Rust/PyO3 remains open, but it
+does not change the frozen wire contract and is not a blocker for Layer-4
+requirements or simulation.
+
+The two simulators expose different failures and should not be collapsed:
+
+- The original adversary model supplies behavioral attacks: delayed
+  activation, selective harm, witness avoidance, endorsement farming,
+  recovery, and faction manipulation.
+- The spatial model supplies epistemic attacks: honest viewers receive
+  different evidence at different times, so disagreement and
+  `awaiting-context` are normal outcomes rather than evaluator failures.
+
+Flat positive/negative accumulation has three structural weaknesses. Repeated
+claims by one issuer imitate corroboration; endorsements are allowed to stand
+in for direct experience; and a numeric result hides whether confidence comes
+from evidence, prior, or missing context. The candidate design therefore uses
+categorical outcomes with a trace, distinct-issuer thresholds, separate direct
+and endorsement classes, and no negative inference from absence.
+
+Trust paths are useful for deciding whether an issuer is eligible across
+community boundaries, but dangerous as evidence multipliers. Vouch 1.0 makes
+bounded paths a standard evaluator capability that is disabled unless a
+policy opts in. Paths never increase the weight of the underlying testimony.
+
+Withdrawal is modeled as a new signed disposition rather than cryptographic
+revocation. Competing disposition heads are a real dispute and surface as
+`contested`; the evaluator does not silently choose one.
+
+These findings produced `vouch-requirements.1.0.md` and the candidate
+`vouch.spec.1.0.md`. They are proposals for evaluation, not ratified law.

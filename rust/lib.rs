@@ -9,6 +9,7 @@
 pub mod bundle;
 pub mod cbor;
 pub mod steward;
+pub mod vouch;
 
 pub use cbor::{CborError, Value};
 

@@ -132,6 +132,19 @@ adversary behaviors. Select a behavior under **Adversary laboratory**, inject
 it, and click villagers to compare their locally held evidence and Vouch
 outcomes.
 
+Movement is phase-budgeted: every trip completes within the current visual
+phase at every pace, while residents staying home remain exactly at their home
+instead of drifting. Lines on the map show the current phase's direct deals,
+ceremonies, help, and gossip. With a villager selected, the display is limited
+to interactions they observed and adds lighter evidence lines for attestations
+that actually informed their own direct decisions.
+
+Injected adversaries retain their preset type. Omniscient view gives each of
+the 16 types a stable default color and persistent `name · type` label so their
+survival, expulsion, and accumulation are visually traceable. Selecting a
+villager hides those labels and colors because that ground truth is not part of
+the villager's evidence.
+
 Run the full comparison (25 deterministic seeds per preset, 120 days):
 
 ```sh

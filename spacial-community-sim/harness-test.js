@@ -147,7 +147,40 @@ let threw = false;
 try { cost("teleport", farmHome, world.market); } catch (e) { threw = true; }
 console.log("   unknown op throws:", threw ? "PASS" : "FAIL");
 
-// ---------- 6. Timing ----------
+// ---------- 6. Movement invariants ----------
+seedState(normalizeParams({}));
+snapPositions();
+const resident = members()[0];
+const homeBefore = { ...resident.pos };
+runPhaseLogic(normalizeParams({}), 0);
+assignTargets(normalizeParams({}));
+const homeStable = dist(homeBefore, resident.target) < 1e-9;
+resident.target = { x: resident.pos.x + 0.5, y: resident.pos.y };
+prepareJourneys(0.5);
+moveVillagers(0.41);
+moveVillagers(0.01);
+const arrivedOnBudget = dist(resident.pos, resident.target) < 1e-9;
+console.log("6. MOVEMENT: idle home stable:", homeStable ? "PASS" : "FAIL",
+  "| phase-budgeted arrival:", arrivedOnBudget ? "PASS" : "FAIL");
+
+// ---------- 7. Interaction overlay ----------
+const pOverlay = normalizeParams({ vouchMode: true });
+seedState(pOverlay);
+nextPhase(pOverlay);
+const overlay = buildInteractionOverlay(null, pOverlay);
+const decision = state.interactions.find((x) => x.decisionMaker);
+const viewer = decision ? state.byId.get(decision.decisionMaker) : members()[0];
+const selectedOverlay = buildInteractionOverlay(viewer, pOverlay);
+console.log("7. INTERACTIONS: direct edges", overlay.direct.length,
+  "| selected evidence edges", selectedOverlay.evidence.length,
+  overlay.direct.length > 0 && selectedOverlay.evidence.length > 0 ? "-> PASS" : "-> FAIL");
+
+// ---------- 8. Persistent adversary identity ----------
+const marked = injectAdversary("sovereign");
+console.log("8. ADVERSARY LABEL:", marked.adversaryType === "sovereign" ? "PASS" : "FAIL",
+  `(${marked.label} · ${marked.adversaryType})`);
+
+// ---------- 9. Timing ----------
 const t0 = Date.now();
 runScenario({}, 200);
-console.log("6. TIMING: 200 days in", Date.now() - t0, "ms");
+console.log("9. TIMING: 200 days in", Date.now() - t0, "ms");

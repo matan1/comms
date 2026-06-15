@@ -98,6 +98,8 @@ function frame(now) {
     if (phaseClock >= phaseDuration(p.speed)) {
       phaseClock = 0;
       nextPhase(p);
+      prepareJourneys(phaseDuration(p.speed));
+      state.interactionOverlay = buildInteractionOverlay(viewpoint(), p);
       renderStatic();
     }
   }
@@ -108,6 +110,7 @@ function frame(now) {
   const h = ui.canvas.clientHeight;
   drawWorld(ctx, w, h);
   drawPulses(ctx, w, h, dt);
+  drawInteractions(ctx, w, h);
   drawVillagers(ctx, w, h);
 
   requestAnimationFrame(frame);
@@ -115,6 +118,7 @@ function frame(now) {
 
 // DOM-side panels: only re-rendered on phase changes or interaction.
 function renderStatic() {
+  state.interactionOverlay = buildInteractionOverlay(viewpoint(), params());
   ui.clock.textContent = `Day ${state.day} · ${PHASES[state.phase].label}`;
   ui.membersMetric.textContent = String(members().length);
   ui.attestMetric.textContent = String(state.attestations.length);
@@ -227,6 +231,7 @@ function stepDay() {
   const p = params();
   do { nextPhase(p); } while (state.phase !== 0);
   snapPositions();
+  state.interactionOverlay = buildInteractionOverlay(viewpoint(), p);
   renderStatic();
 }
 
@@ -235,6 +240,7 @@ function reset() {
   selectedId = null;
   snapPositions();
   phaseClock = 0;
+  state.interactionOverlay = buildInteractionOverlay(null, params());
   renderStatic();
 }
 

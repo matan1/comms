@@ -14,6 +14,32 @@
 
 let pulses = [];   // transient visual events (attestation births, gossip)
 
+const interactionColors = {
+  deal: "#b87815",
+  help: "#2f7d66",
+  ceremony: "#2e6f9e",
+  gossip: "#4f8f8b"
+};
+
+const adversaryColors = {
+  classic: "#8f3f71",
+  sleeper: "#5968a6",
+  selective: "#b45742",
+  parasite: "#85752f",
+  charmer: "#c45f91",
+  ghost: "#71818c",
+  freeRider: "#b0823d",
+  cultivator: "#4f8a68",
+  factionist: "#7e4ca1",
+  infiltrator: "#405d86",
+  ideologue: "#a44e55",
+  brinksman: "#c46d2d",
+  flash: "#d13f3f",
+  patriarch: "#684a3e",
+  wrecker: "#8b3131",
+  sovereign: "#4f3f91"
+};
+
 function ripple(a, b) {
   if (pulses.length > 140) return;
   pulses.push({
@@ -224,7 +250,9 @@ function drawVillagers(ctx, w, h) {
         fill = colorForTrust(perceivedTrust(vp, v.id));
       }
     } else {
-      fill = v.member ? colorForTrust(state.cached.mean.get(v.id) ?? state.prior) : "#b87815";
+      fill = v.adversaryType
+        ? adversaryColors[v.adversaryType]
+        : (v.member ? colorForTrust(state.cached.mean.get(v.id) ?? state.prior) : "#b87815");
     }
 
     ctx.globalAlpha = faded ? 0.45 : 1;
@@ -261,11 +289,67 @@ function drawVillagers(ctx, w, h) {
       ctx.fillStyle = "#1e2527";
       ctx.font = "bold 12px ui-monospace, monospace";
       ctx.fillText(v.label, x + r + 6, y + 4);
+    } else if (!vp && v.adversaryType) {
+      ctx.fillStyle = "rgba(30, 37, 39, 0.88)";
+      ctx.font = "bold 10px ui-monospace, monospace";
+      ctx.fillText(`${v.label} · ${v.adversaryType}`, x + r + 4, y + 4);
     } else if (!vp && (v.capability > 0.95 || !v.member)) {
       ctx.fillStyle = "rgba(30, 37, 39, 0.75)";
       ctx.font = "11px ui-monospace, monospace";
       ctx.fillText(v.label, x + r + 4, y + 4);
     }
+  }
+}
+
+function drawCurvedLink(ctx, w, h, edge, color, width, alpha, dashed = false) {
+  const a = state.byId.get(edge.from);
+  const b = state.byId.get(edge.to);
+  if (!a || !b) return;
+  const x1 = a.pos.x * w;
+  const y1 = a.pos.y * h;
+  const x2 = b.pos.x * w;
+  const y2 = b.pos.y * h;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.max(1, Math.hypot(dx, dy));
+  const bend = (edge.lane || 0) * Math.min(7, len * 0.045);
+  const cx = (x1 + x2) / 2 - (dy / len) * bend;
+  const cy = (y1 + y2) / 2 + (dx / len) * bend;
+  ctx.save();
+  if (dashed) ctx.setLineDash([4, 5]);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.quadraticCurveTo(cx, cy, x2, y2);
+  ctx.strokeStyle = hexToRgba(color, alpha);
+  ctx.lineWidth = width;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawInteractions(ctx, w, h) {
+  const overlay = state.interactionOverlay || { direct: [], evidence: [] };
+  for (const edge of overlay.evidence) {
+    const colors = {
+      positive: "#2f7d66",
+      negative: "#b65345",
+      endorsement: "#6a8f5a",
+      ceremony: "#2e6f9e",
+      context: "#637074"
+    };
+    drawCurvedLink(
+      ctx, w, h, edge, colors[edge.class] || colors.context,
+      edge.counted ? 1.35 : 0.8,
+      edge.counted ? 0.36 : 0.18,
+      !edge.counted
+    );
+  }
+  for (const edge of overlay.direct) {
+    const failed = ["failed", "not-admitted"].includes(edge.outcome);
+    drawCurvedLink(
+      ctx, w, h, edge,
+      failed ? "#b65345" : (interactionColors[edge.kind] || "#637074"),
+      2.4, 0.72
+    );
   }
 }
 
@@ -285,20 +369,29 @@ function drawPulses(ctx, w, h, dt) {
   pulses = pulses.filter((pulse) => pulse.t < 2);
 }
 
-function moveVillagers(dt) {
-  const speed = 0.14;
+function prepareJourneys(seconds) {
   for (const v of state.villagers) {
-    const dx = v.target.x - v.pos.x;
-    const dy = v.target.y - v.pos.y;
-    const d = Math.hypot(dx, dy);
-    const stepLen = Math.min(d, speed * dt);
-    if (d > 0.0005) {
-      v.pos.x += (dx / d) * stepLen;
-      v.pos.y += (dy / d) * stepLen;
+    const distance = dist(v.pos, v.target);
+    v.journey = distance < 0.00005 ? null : {
+      from: { ...v.pos },
+      to: { ...v.target },
+      elapsed: 0,
+      duration: Math.max(0.08, seconds * 0.82)
+    };
+  }
+}
+
+function moveVillagers(dt) {
+  for (const v of state.villagers) {
+    if (!v.journey) continue;
+    v.journey.elapsed = Math.min(v.journey.duration, v.journey.elapsed + dt);
+    const t = v.journey.elapsed / v.journey.duration;
+    const eased = t * t * (3 - 2 * t);
+    v.pos.x = v.journey.from.x + (v.journey.to.x - v.journey.from.x) * eased;
+    v.pos.y = v.journey.from.y + (v.journey.to.y - v.journey.from.y) * eased;
+    if (t >= 1) {
+      v.pos = { ...v.journey.to };
+      v.journey = null;
     }
-    // A faint idle sway so the village never looks frozen.
-    const t = performance.now() / 1000 + v.wander;
-    v.pos.x += Math.sin(t * 0.9) * 0.00018;
-    v.pos.y += Math.cos(t * 0.7) * 0.00015;
   }
 }

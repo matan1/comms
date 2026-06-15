@@ -150,7 +150,7 @@ function makeVillager(index, opts = {}) {
     home,                             // a plot reference, not a copy
     pos: opts.pos ? { ...opts.pos } : { x: home.x, y: home.y },
     target: { x: home.x, y: home.y },
-    wander: rand() * 1000,
+    journey: null,
     arrivedDay: state ? state.day : 0,
     joinedDay: opts.member !== false ? 0 : null,
     sponsors: [],
@@ -166,6 +166,7 @@ function makeVillager(index, opts = {}) {
     feed: [],
     beliefs: new Map(),
     ap: opts.ap || null,
+    adversaryType: opts.adversaryType || null,
     lyingLowUntil: 0
   };
 }
@@ -214,6 +215,13 @@ function addAttestation(fields, knowers) {
     pulses.push({ kind: "attest", x: fields.at.x, y: fields.at.y, t: 0, color: attColors[fields.type] || "#637074" });
   }
   return idx;
+}
+
+function recordInteraction(kind, participants, detail = {}) {
+  const ids = [...new Set(participants.map((v) => typeof v === "string" ? v : v.id))]
+    .filter((id) => state.byId.has(id));
+  if (ids.length < 2) return;
+  state.interactions.push({ kind, participants: ids, ...detail });
 }
 
 function perceivedTrust(viewer, subjectId) {
@@ -297,6 +305,8 @@ function seedState(p) {
     byId: new Map(),
     attestations: [],
     events: [],
+    interactions: [],
+    interactionOverlay: { direct: [], evidence: [] },
     nextId: 1,
     nextVillager: 0,
     cached: { coverage: 0, spread: 0, mean: new Map() }
@@ -356,6 +366,7 @@ function advanceDay(p) {
 }
 
 function runPhaseLogic(p, phase) {
+  state.interactions = [];
   if (phase === 0) phaseMorning(p);
   else if (phase === 1) phaseMarket(p);
   else if (phase === 2) phaseCommons(p);
@@ -413,13 +424,20 @@ function phaseMarket(p) {
       failed = cheat ? rand() < 0.55 : rand() < 0.07;
     }
     seller.stock = Math.max(0, seller.stock - 0.8);
-    addAttestation({
+    const dealIdx = addAttestation({
       type: "deal-record/1",
       by: buyer.id,
       target: seller.id,
       detail: { outcome: failed ? "failed" : "completed", good: seller.specialty.id },
       at: world.market
     }, [buyer, seller, ...witnesses]);
+    recordInteraction("deal", [buyer, seller, ...witnesses], {
+      primary: [buyer.id, seller.id],
+      decisionMaker: buyer.id,
+      target: seller.id,
+      attestation: dealIdx,
+      outcome: failed ? "failed" : "completed"
+    });
     if (failed) {
       logEvent("deal-record/1", `${seller.label} shorted a delivery`, `${buyer.label} recorded the broken pledge at the market.`);
       if (rand() < 0.35 + p.objectionRate * 0.5) {
@@ -450,13 +468,20 @@ function phaseMarket(p) {
       const helped = pick(sellers);
       if (!helped) continue;
       const witnesses = nearestBySpot(attendees, helped, 2);
-      addAttestation({
+      const dealIdx = addAttestation({
         type: "deal-record/1",
         by: helped.id,
         target: cand.id,
         detail: { outcome: rand() < 0.92 ? "completed" : "failed", good: "labor" },
         at: world.market
       }, [helped, cand, ...witnesses]);
+      recordInteraction("help", [helped, cand, ...witnesses], {
+        primary: [helped.id, cand.id],
+        decisionMaker: helped.id,
+        target: cand.id,
+        attestation: dealIdx,
+        outcome: state.attestations[dealIdx].detail.outcome
+      });
     }
   }
 
@@ -510,7 +535,7 @@ function phaseCommons(p) {
       && attendees.length >= p.witnessQuorum
       && objectors.length <= Math.floor(attendees.length * 0.25);
 
-    addAttestation({
+    const ceremonyIdx = addAttestation({
       type: "ceremony-record/1",
       by: "comms.steward:zVILLAGE",
       target: candidate.id,
@@ -520,6 +545,17 @@ function phaseCommons(p) {
       },
       at: world.commons
     }, [candidate, ...attendees]);
+    recordInteraction("ceremony", [
+      candidate,
+      ...sponsors.slice(0, Math.max(p.sponsors, 1)),
+      ...objectors.slice(0, 3)
+    ], {
+      primary: sponsors.length ? [sponsors[0].id, candidate.id] : null,
+      decisionMaker: sponsors.length ? sponsors[0].id : null,
+      target: candidate.id,
+      attestation: ceremonyIdx,
+      outcome: committed ? "admitted" : "not-admitted"
+    });
 
     if (committed) {
       candidate.member = true;
@@ -581,13 +617,14 @@ function failureReason(p, sponsors, witnesses, objections) {
   return `${objections} objections at the commons stalled it.`;
 }
 
-function arrive(archetype, ap = null) {
+function arrive(archetype, ap = null, adversaryType = null) {
   const v = makeVillager(state.nextVillager++, {
     member: false,
     archetype,
     home: { ...world.camp },
     pos: { x: 0.14, y: 0.99 },
-    ap
+    ap,
+    adversaryType
   });
   if (archetype === "defector" || archetype === "adversary") {
     v.capability = clamp(0.85 + rand() * 0.3, 0.2, 1.15);
@@ -609,7 +646,7 @@ function injectDefector() {
 function injectAdversary(name = "classic") {
   const preset = ADVERSARY_PRESETS[name];
   if (!preset) throw new Error(`unknown adversary preset: ${name}`);
-  return arrive("adversary", { ...preset });
+  return arrive("adversary", { ...preset }, name);
 }
 
 function adversaryIsActive(v) {
@@ -670,7 +707,14 @@ function gossipAmong(group, p) {
       if (talks >= budget) break;
       if (rand() < 0.55) {
         talks += 1;
-        if (exchange(v, other, p.gossipDepth) > 0) ripple(v, other);
+        const moved = exchange(v, other, p.gossipDepth);
+        if (moved > 0) {
+          ripple(v, other);
+          recordInteraction("gossip", [v, other], {
+            primary: [v.id, other.id],
+            outcome: `${moved}-records`
+          });
+        }
       }
     }
   }
@@ -693,7 +737,14 @@ function gossipByProximity(group, p) {
       if (talks >= 2) break;
       if (rand() < 0.6) {
         talks += 1;
-        if (exchange(v, o, p.gossipDepth) > 0) ripple(v, o);
+        const moved = exchange(v, o, p.gossipDepth);
+        if (moved > 0) {
+          ripple(v, o);
+          recordInteraction("gossip", [v, o], {
+            primary: [v.id, o.id],
+            outcome: `${moved}-records`
+          });
+        }
       }
     }
   }
@@ -724,9 +775,12 @@ function assignTargets(p) {
     } else if (phase === "commons" && v.atCommons && v.spot) {
       v.target = { ...v.spot };
     } else if (!v.member) {
-      v.target = jitterAround(world.camp, 0.02);
+      // Preserve the historical PRNG schedule without applying visual jitter.
+      rand(); rand();
+      v.target = { x: world.camp.x, y: world.camp.y };
     } else {
-      v.target = jitterAround(v.home, 0.008);
+      rand(); rand();
+      v.target = { x: v.home.x, y: v.home.y };
     }
   }
 }
@@ -738,7 +792,73 @@ function jitterAround(pt, r) {
 }
 
 function snapPositions() {
-  for (const v of state.villagers) v.pos = { ...v.target };
+  for (const v of state.villagers) {
+    v.pos = { ...v.target };
+    v.journey = null;
+  }
+}
+
+function evidenceClass(att) {
+  if (att.type === "deal-record/1") {
+    return att.detail.outcome === "completed" ? "positive" : "negative";
+  }
+  if (att.type === "objection/1") return "negative";
+  if (att.type === "endorsement/1") return "endorsement";
+  if (att.type === "ceremony-record/1") return "ceremony";
+  return "context";
+}
+
+function buildInteractionOverlay(viewer, p) {
+  const direct = [];
+  const evidence = [];
+  const seenDirect = new Set();
+  const seenEvidence = new Set();
+
+  for (const interaction of state.interactions) {
+    const visible = !viewer
+      || interaction.participants.includes(viewer.id)
+      || (interaction.attestation !== undefined
+        && viewer.knowledge.has(interaction.attestation));
+    if (!visible) continue;
+
+    const pairs = interaction.primary
+      ? [interaction.primary]
+      : interaction.participants.slice(1).map((id) => [interaction.participants[0], id]);
+    for (const [from, to] of pairs) {
+      const key = `${interaction.kind}:${from}:${to}`;
+      if (seenDirect.has(key)) continue;
+      seenDirect.add(key);
+      direct.push({
+        from, to, kind: interaction.kind, outcome: interaction.outcome,
+        lane: direct.length % 5 - 2
+      });
+    }
+
+    if (!viewer || !interaction.target) continue;
+    const decisionMaker = interaction.decisionMaker
+      ? state.byId.get(interaction.decisionMaker)
+      : viewer;
+    if (decisionMaker !== viewer) continue;
+
+    for (const idx of viewer.knowledge) {
+      const att = state.attestations[idx];
+      if (att.target !== interaction.target || !state.byId.has(att.by)) continue;
+      const key = `${att.by}:${att.target}:${evidenceClass(att)}`;
+      if (seenEvidence.has(key)) continue;
+      seenEvidence.add(key);
+      evidence.push({
+        from: att.by,
+        to: att.target,
+        class: evidenceClass(att),
+        depth: 1,
+        counted: p.vouchMode
+          ? ["deal-record/1", "objection/1"].includes(att.type)
+          : ["deal-record/1", "endorsement/1", "objection/1", "ceremony-record/1"].includes(att.type),
+        lane: evidence.length % 7 - 3
+      });
+    }
+  }
+  return { direct, evidence };
 }
 
 // --- Derived metrics (cached per phase, not per frame) ----------------------------------

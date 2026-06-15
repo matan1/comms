@@ -42,13 +42,23 @@ if (world.keyManagers.host.length !== 1
 }
 const edge = { from: members()[0].id, to: members()[1].id, lane: 0 };
 members()[0].pos = { x: 0.5, y: 0.5 };
+const linkStart = (path) => (path.kind === "poly"
+  ? { x: path.pts[0].x, y: path.pts[0].y }
+  : { x: path.x1, y: path.y1 });
 const processPath = curvedLinkGeometry(1000, 1000, edge);
 const originalEndpointMode = interactionEndpointMode;
 interactionEndpointMode = () => "core";
 const corePath = curvedLinkGeometry(1000, 1000, edge);
 interactionEndpointMode = originalEndpointMode;
-if (processPath.x1 === corePath.x1 && processPath.y1 === corePath.y1) {
+const ps = linkStart(processPath);
+const cs = linkStart(corePath);
+if (ps.x === cs.x && ps.y === cs.y) {
   throw new Error("endpoint projection did not move to the signing core");
+}
+// Workstation links now ride the host buses: the routed polyline should have
+// interior bus vertices between the two endpoints, not just a straight hop.
+if (processPath.kind !== "poly" || processPath.pts.length < 2) {
+  throw new Error("workstation link is not a routed bus polyline");
 }
 
 nextPhase(p);

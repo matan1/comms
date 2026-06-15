@@ -268,6 +268,105 @@ function rebuildCostField() {
   buildCostFieldFor(world);
 }
 
+// --- Bus-aware link routing ----------------------------------------------------------
+// The visual twin of the cost field's "walk to a road, ride it, walk off": a
+// relationship line gets onto the nearest bus, runs along it, and steps off to
+// the other end, instead of teleporting across the cell. Pure geometry over
+// `roadGeom` (normalized coords, RNG-free), so determinism survives.
+
+// Nearest projection of p onto one road polyline; returns the foot point, its
+// arc-length s along the polyline, and the distance d off the road.
+function projectOntoRoad(p, geom) {
+  let best = { d: Infinity, s: 0, point: geom.pts[0] };
+  for (let i = 0; i < geom.pts.length - 1; i += 1) {
+    const a = geom.pts[i];
+    const b = geom.pts[i + 1];
+    const { d, t } = pointSegDist(p, a, b);
+    if (d < best.d) {
+      best = {
+        d,
+        s: geom.cum[i] + t * (geom.cum[i + 1] - geom.cum[i]),
+        point: { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) }
+      };
+    }
+  }
+  return best;
+}
+
+// Fan parallel links apart along the bus: shift each run point perpendicular to
+// the local bus direction by lane * gap. Endpoints (the real nodes) are left be.
+function laneOffsetPts(pts, lane) {
+  if (!lane) return pts;
+  const gap = 0.006 * lane;
+  return pts.map((p, i) => {
+    const prev = pts[Math.max(0, i - 1)];
+    const next = pts[Math.min(pts.length - 1, i + 1)];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.max(1e-6, Math.hypot(dx, dy));
+    return { x: p.x - (dy / len) * gap, y: p.y + (dx / len) * gap };
+  });
+}
+
+function dedupePath(pts) {
+  const out = [];
+  for (const p of pts) {
+    const last = out[out.length - 1];
+    if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1e-4) out.push(p);
+  }
+  return out.length >= 2 ? out : pts.slice(0, 2);
+}
+
+// Route a → b along the single bus that costs the least off-road stub, the way
+// the cost model picks the cheapest road. Returns a normalized polyline
+// [a, entry, ...interior bus vertices..., exit, b]; falls back to [a, b].
+function busRoute(a, b, lane = 0) {
+  const geoms = world && world.roadGeom;
+  if (!geoms || !geoms.length) return [a, b];
+  let pick = null;
+  for (const geom of geoms) {
+    const ea = projectOntoRoad(a, geom);
+    const eb = projectOntoRoad(b, geom);
+    const stub = ea.d + eb.d;
+    if (!pick || stub < pick.stub) pick = { stub, geom, ea, eb };
+  }
+  const { geom, ea, eb } = pick;
+  const lo = Math.min(ea.s, eb.s);
+  const hi = Math.max(ea.s, eb.s);
+  const mids = [];
+  for (let i = 0; i < geom.pts.length; i += 1) {
+    if (geom.cum[i] > lo + 1e-6 && geom.cum[i] < hi - 1e-6) mids.push(geom.pts[i]);
+  }
+  if (ea.s > eb.s) mids.reverse();
+  const run = laneOffsetPts([ea.point, ...mids, eb.point], lane);
+  return dedupePath([a, ...run, b]);
+}
+
+// Point at fractional arc length t in [0,1] along a polyline (any units), so a
+// directional marker can ride a routed path the way it rides a Bézier.
+function pointAlongPath(pts, t) {
+  if (!pts || pts.length === 0) return { x: 0, y: 0 };
+  if (pts.length === 1) return { x: pts[0].x, y: pts[0].y };
+  const seg = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i += 1) {
+    const d = dist(pts[i - 1], pts[i]);
+    seg.push(d);
+    total += d;
+  }
+  if (total <= 0) return { x: pts[0].x, y: pts[0].y };
+  let target = clamp(t, 0, 1) * total;
+  for (let i = 0; i < seg.length; i += 1) {
+    if (target <= seg[i] || i === seg.length - 1) {
+      const f = seg[i] > 0 ? target / seg[i] : 0;
+      return { x: lerp(pts[i].x, pts[i + 1].x, f), y: lerp(pts[i].y, pts[i + 1].y, f) };
+    }
+    target -= seg[i];
+  }
+  const last = pts[pts.length - 1];
+  return { x: last.x, y: last.y };
+}
+
 function costCellAt(x, y) {
   const n = world.costField.n;
   const gx = clamp(Math.floor(x * n), 0, n - 1);

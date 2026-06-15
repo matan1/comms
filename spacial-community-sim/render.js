@@ -660,6 +660,14 @@ function curvedLinkGeometry(w, h, edge) {
   const useCore = world.kind === "workstation" && interactionEndpointMode() === "core";
   const start = useCore ? a.home : a.pos;
   const end = useCore ? b.home : b.pos;
+
+  // Workstation links ride the host buses (see busRoute); the village keeps its
+  // point-to-point quadratic, so the two maps now read as different systems.
+  if (world.kind === "workstation") {
+    const pts = busRoute(start, end, edge.lane || 0).map((p) => ({ x: p.x * w, y: p.y * h }));
+    return { kind: "poly", pts };
+  }
+
   const x1 = start.x * w;
   const y1 = start.y * h;
   const x2 = end.x * w;
@@ -670,7 +678,7 @@ function curvedLinkGeometry(w, h, edge) {
   const bend = (edge.lane || 0) * Math.min(7, len * 0.045);
   const cx = (x1 + x2) / 2 - (dy / len) * bend;
   const cy = (y1 + y2) / 2 + (dx / len) * bend;
-  return { x1, y1, x2, y2, cx, cy };
+  return { kind: "quad", x1, y1, x2, y2, cx, cy };
 }
 
 function drawCurvedLink(ctx, w, h, edge, color, width, alpha, progress, dashed = false) {
@@ -679,20 +687,30 @@ function drawCurvedLink(ctx, w, h, edge, color, width, alpha, progress, dashed =
   ctx.save();
   if (dashed) ctx.setLineDash([4, 5]);
   ctx.beginPath();
-  ctx.moveTo(path.x1, path.y1);
-  ctx.quadraticCurveTo(path.cx, path.cy, path.x2, path.y2);
+  let marker;
+  if (path.kind === "poly") {
+    ctx.lineJoin = "round";
+    ctx.moveTo(path.pts[0].x, path.pts[0].y);
+    for (let i = 1; i < path.pts.length; i += 1) ctx.lineTo(path.pts[i].x, path.pts[i].y);
+    marker = pointAlongPath(path.pts, progress);
+  } else {
+    ctx.moveTo(path.x1, path.y1);
+    ctx.quadraticCurveTo(path.cx, path.cy, path.x2, path.y2);
+    const t = progress;
+    const mt = 1 - t;
+    marker = {
+      x: mt * mt * path.x1 + 2 * mt * t * path.cx + t * t * path.x2,
+      y: mt * mt * path.y1 + 2 * mt * t * path.cy + t * t * path.y2
+    };
+  }
   ctx.strokeStyle = hexToRgba(color, alpha);
   ctx.lineWidth = width;
   ctx.stroke();
 
   if (edge.directional !== false) {
-    const t = progress;
-    const mt = 1 - t;
-    const x = mt * mt * path.x1 + 2 * mt * t * path.cx + t * t * path.x2;
-    const y = mt * mt * path.y1 + 2 * mt * t * path.cy + t * t * path.y2;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(1.8, width * 1.15), 0, Math.PI * 2);
+    ctx.arc(marker.x, marker.y, Math.max(1.8, width * 1.15), 0, Math.PI * 2);
     ctx.fillStyle = hexToRgba(color, Math.min(1, alpha + 0.25));
     ctx.fill();
   }

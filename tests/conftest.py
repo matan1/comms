@@ -6,10 +6,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# `import comms` resolves to this checkout (the repo root is the package dir,
-# so its parent goes on the path; the checkout must be named "comms").
-assert REPO_ROOT.name == "comms", "checkout must be named 'comms' to import"
+# `import comms` resolves to the subpackage at REPO_ROOT/comms/, so REPO_ROOT
+# itself goes on the path. (REPO_ROOT.parent is kept for back-compat with the
+# old layout, where the checkout dir itself was the package; harmless now.)
 sys.path.insert(0, str(REPO_ROOT.parent))
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 

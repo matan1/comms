@@ -413,3 +413,46 @@ def test_verify_flags_dangling_supersedes(trial, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "dangling" in out
+
+
+# --- synchrony view: the same axes verify checks, kept legible and separate ------
+
+def test_synchrony_record_axis_breaks_when_entry_missing_from_log(trial, capsys):
+    cc, base, store_dir, pending = trial
+    (base / "trial-log.md").write_text("# log\n## Session 0\n")
+    session = cc.Steward.generate()
+    entry = _entry(cc, session, 3)
+    cc.Store(store_dir).put(entry)
+
+    res = cc.compute_synchrony(cc.Store(store_dir))
+    assert res["axes"]["record"]["state"] == "broken"
+    assert res["aligned"] is False
+
+    rc = cc.cmd_synchrony(Namespace(json=False, no_color=True))
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "OUT OF SYNC" in out
+    assert "not yet whole" in out
+
+
+def test_synchrony_record_axis_ok_when_entry_present_in_log(trial):
+    cc, base, store_dir, pending = trial
+    session = cc.Steward.generate()
+    entry = _entry(cc, session, 3)
+    cc.Store(store_dir).put(entry)
+    (base / "trial-log.md").write_text(
+        f"# log\n## Session 3\n- entry attestation: {entry.id}\n")
+
+    res = cc.compute_synchrony(cc.Store(store_dir))
+    assert res["axes"]["record"]["state"] == "ok"
+    assert res["axes"]["signatures"]["state"] == "ok"
+
+
+def test_synchrony_json_marks_empty_store_axes_not_applicable(trial, capsys):
+    cc, base, store_dir, pending = trial
+    rc = cc.cmd_synchrony(Namespace(json=True, no_color=True))
+    data = json.loads(capsys.readouterr().out)
+    assert data["attestations"] == 0
+    assert data["axes"]["signatures"]["state"] == "na"
+    assert data["aligned"] is False
+    assert rc == 1

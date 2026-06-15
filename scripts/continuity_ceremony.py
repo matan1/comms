@@ -53,8 +53,12 @@ import json
 import sys
 from pathlib import Path
 
+# The `comms` package lives in REPO/comms/, so REPO itself must be on the path.
+# (Historically the checkout dir *was* the package and REPO.parent was used;
+# the modules have since moved into a subpackage. Putting REPO here means
+# `python scripts/continuity_ceremony.py verify` works without -m or PYTHONPATH.)
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO.parent))
+sys.path.insert(0, str(REPO))
 
 import cbor2
 
@@ -1157,6 +1161,151 @@ def cmd_verify(args):
     return 0
 
 
+# ---- synchrony view: the same truth `verify` checks, made legible -----------------
+# Cartographer's rule: a map shows signs, not a single answer. `verify` already
+# computes several independent axes of "is the record whole?" and collapses them
+# into one exit code. compute_synchrony keeps them apart so a viewer can see
+# *which* tumblers are aligned, and the tumbler view renders them — meaning and
+# proof in the same frame, never reduced to a lone green check.
+
+def compute_synchrony(store: "Store") -> dict:
+    """Re-derive the verification axes as structured data (no printing), reusing
+    the same helpers `verify` uses. Axes: signatures (each record verifies),
+    references (each ref resolves), law (single current constitution head matches
+    the live file), record (trial-log reflects the store; declared letters
+    exist), durability (the store is committed, not just in the working tree).
+    Each axis is 'ok', 'broken', or 'na' (the check does not apply here)."""
+    import re as _re
+
+    atts = list(store.all())
+    integrity = [{"id": a.id, "ok": a.verified()[0]} for a in atts]
+    sig_fail = [{"id": a.id, "why": a.verified()[1]} for a in atts if not a.verified()[0]]
+    unresolved = []
+    for a in atts:
+        ok, missing = a.resolvable(store)
+        if not ok:
+            unresolved.append({"id": a.id, "missing": missing})
+
+    def axis(state, **detail):
+        return {"state": state, **detail}
+
+    n = len(atts)
+    signatures = axis("na" if n == 0 else ("ok" if not sig_fail else "broken"),
+                      ok=n - len(sig_fail), total=n, failures=sig_fail)
+    references = axis("na" if n == 0 else ("ok" if not unresolved else "broken"),
+                      ok=n - len(unresolved), total=n, unresolved=unresolved)
+
+    head, consts, dangling = current_constitution(store)
+    if not consts:
+        law = axis("na", head=None, matches=None, dangling=[], forked=False)
+    else:
+        live = (BASE / "constitution.md").read_bytes()
+        matches = head is not None and head.claim["document"]["body"] == live
+        law = axis("ok" if (matches and not dangling) else "broken",
+                   head=head.id if head else None, matches=matches,
+                   dangling=list(dangling), forked=head is None)
+
+    log_text = ""
+    log_path = BASE / "trial-log.md"
+    if log_path.exists():
+        log_text = log_path.read_text()
+    missing_entries = [{"session": nm, "id": a.id}
+                       for a, nm in session_log_entries(store) if a.id not in log_text]
+    declared = _re.findall(r"letter:\s*(comms\.attest:z[1-9A-HJ-NP-Za-km-z]+)", log_text)
+    dangling_letters = [r for r in declared if store.get(r) is None]
+    placeholders = log_text.count("<id once archived>")
+    record_ok = not (missing_entries or dangling_letters or placeholders)
+    record = axis("ok" if record_ok else "broken",
+                  missing_entries=missing_entries, dangling_letters=dangling_letters,
+                  placeholders=placeholders)
+
+    dirty = uncommitted_store_files()
+    if dirty is None:
+        durability = axis("na", uncommitted=None)
+    else:
+        durability = axis("ok" if not dirty else "broken", uncommitted=dirty)
+
+    axes = {"signatures": signatures, "references": references, "law": law,
+            "record": record, "durability": durability}
+    aligned = (signatures["state"] == "ok"
+               and not any(ax["state"] == "broken" for ax in axes.values()))
+    return {"store": str(STORE), "attestations": n, "axes": axes,
+            "attestation_integrity": integrity, "aligned": aligned}
+
+
+_AXIS_ORDER = ["signatures", "references", "law", "record", "durability"]
+_AXIS_BLURB = {
+    "signatures": "every record is signed by the key it claims",
+    "references": "every reference resolves in the store",
+    "law": "the live constitution is the current, signed head",
+    "record": "the trial-log reflects the store; declared letters exist",
+    "durability": "the store is committed, not just in the working tree",
+}
+
+
+def _synchrony_lines(res: dict, color: bool) -> list[str]:
+    def c(s, code):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    glyph = {"ok": ("●", "32"), "broken": ("●", "31"), "na": ("◌", "90")}
+    word = {"ok": "in sync", "broken": "OUT OF SYNC", "na": "n/a"}
+    detail = {
+        "signatures": lambda a: f"{a['ok']}/{a['total']} records verify"
+            + ("" if a["state"] != "broken" else
+               "  " + ", ".join(f["id"].split(':')[-1][:10] + '…' for f in a["failures"])),
+        "references": lambda a: f"{a['ok']}/{a['total']} resolve"
+            + ("" if a["state"] != "broken" else
+               "  unresolved: " + str(len(a["unresolved"]))),
+        "law": lambda a: ("no constitution in the store" if a["state"] == "na"
+            else (f"head {a['head'].split(':')[-1][:10]}… matches the live file"
+                  if a["matches"] and not a["dangling"]
+                  else ("chain forks" if a["forked"]
+                        else ("dangling supersedes" if a["dangling"]
+                              else "live file DIFFERS from the head")))),
+        "record": lambda a: ("trial-log reflects the store; no dangling letters"
+            if a["state"] == "ok" else
+            f"{len(a['missing_entries'])} entr(y/ies) missing from the log, "
+            f"{len(a['dangling_letters'])} dangling letter(s), "
+            f"{a['placeholders']} placeholder(s)"),
+        "durability": lambda a: ("no git context" if a["state"] == "na"
+            else ("committed" if a["state"] == "ok"
+                  else f"{len(a['uncommitted'])} store file(s) uncommitted")),
+    }
+    lines = [c(f"continuity synchrony — {res['attestations']} attestations in "
+               f"{res['store']}", "1")]
+    for name in _AXIS_ORDER:
+        a = res["axes"][name]
+        g, code = glyph[a["state"]]
+        row = (f"  {c(g, code)} {name:<11} {c(word[a['state']], code):<9} "
+               f"{detail[name](a)}")
+        lines.append(row)
+        lines.append(f"      {c(_AXIS_BLURB[name], '90')}")
+    # per-record integrity strip — the tumblers at the level of single letters
+    strip = "".join(c("▮", "32") if r["ok"] else c("▮", "31")
+                    for r in res["attestation_integrity"])
+    if strip:
+        lines.append(f"  records  {strip}")
+    n_ok = sum(1 for n2 in _AXIS_ORDER if res["axes"][n2]["state"] == "ok")
+    n_app = sum(1 for n2 in _AXIS_ORDER if res["axes"][n2]["state"] != "na")
+    if res["aligned"]:
+        lines.append(c(f"  {n_ok}/{n_app} axes aligned · the lock is open", "32"))
+    else:
+        lines.append(c(f"  {n_ok}/{n_app} axes aligned · not yet whole", "33"))
+    return lines
+
+
+def cmd_synchrony(args):
+    """Render `verify`'s axes as legible tumblers (or --json for the structure).
+    Same checks as `verify`; this is the view, not a second source of truth."""
+    store = Store(STORE)
+    res = compute_synchrony(store)
+    if getattr(args, "json", False):
+        print(json.dumps(res, indent=2))
+        return 0 if res["aligned"] else 1
+    color = sys.stdout.isatty() and not getattr(args, "no_color", False)
+    print("\n".join(_synchrony_lines(res, color)))
+    return 0 if res["aligned"] else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1305,6 +1454,13 @@ def main():
 
     sub.add_parser("verify")
 
+    sy = sub.add_parser("synchrony",
+                        help="render verify's axes as legible tumblers (the view)")
+    sy.add_argument("--json", action="store_true",
+                    help="emit the structured result instead of the rendered view")
+    sy.add_argument("--no-color", action="store_true",
+                    help="disable ANSI color (also off when stdout is not a tty)")
+
     nc = sub.add_parser("name-commit")
     nc.add_argument("--name", required=True)
     nc.add_argument("--salt-file", default="~/.continuity-name-salt.hex")
@@ -1324,6 +1480,7 @@ def main():
             "open": cmd_open, "status": cmd_status, "log-render": cmd_log_render,
             "sign-transcript": cmd_sign_transcript,
             "archive-letter": cmd_archive_letter,
+            "synchrony": cmd_synchrony,
             "close": cmd_close}[args.cmd](args) or 0
 
 

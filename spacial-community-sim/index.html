@@ -62,6 +62,12 @@
 
           <div class="control-group">
             <h2>Ceremony rule</h2>
+            <label>Appraisal model
+              <select id="appraisalMode">
+                <option value="flat">Flat tally</option>
+                <option value="vouch">Vouch profile</option>
+              </select>
+            </label>
             <label>Sponsors required
               <input id="sponsors" type="range" min="1" max="5" value="2" step="1">
               <output id="sponsorsOut"></output>
@@ -78,7 +84,32 @@
               <input id="arrivalRate" type="range" min="0" max="100" value="35" step="5">
               <output id="arrivalRateOut"></output>
             </label>
-            <button id="injectBtn" type="button" title="A well-presented newcomer who will break pledges once admitted">Inject defector</button>
+          </div>
+
+          <div class="control-group">
+            <h2>Adversary laboratory</h2>
+            <label>Behavior
+              <select id="adversaryPreset">
+                <option value="classic">Classic defector</option>
+                <option value="sleeper">Sleeper</option>
+                <option value="selective">Selective</option>
+                <option value="parasite">Parasite</option>
+                <option value="charmer">Charmer</option>
+                <option value="ghost">Ghost</option>
+                <option value="freeRider">Free rider</option>
+                <option value="cultivator">Cultivator</option>
+                <option value="factionist">Factionist</option>
+                <option value="infiltrator">Infiltrator</option>
+                <option value="ideologue">Ideologue</option>
+                <option value="brinksman">Brinksman</option>
+                <option value="flash">Flash</option>
+                <option value="patriarch">Patriarch</option>
+                <option value="wrecker">Wrecker</option>
+                <option value="sovereign">Sovereign</option>
+              </select>
+            </label>
+            <p id="adversaryDescription" class="control-note"></p>
+            <button id="injectAdversaryBtn" type="button">Inject selected adversary</button>
           </div>
 
           <div class="control-group legend-group">
@@ -88,7 +119,7 @@
               <li><i class="dot trust-low"></i>distrusted, from the same viewpoint</li>
               <li><i class="dot candidate"></i>newcomer awaiting ceremony</li>
               <li><i class="dot stranger"></i>stranger — viewpoint holds no record of them</li>
-              <li><i class="ring defector"></i>defector (omniscient view only)</li>
+              <li><i class="ring defector"></i>adversary (omniscient view only)</li>
               <li><i class="swatch ripple"></i>word of mouth passing between two villagers</li>
             </ul>
             <p class="legend-note">Click a villager to see the village as they believe it. Attestations are born where they happen and travel only by presence and word of mouth — and every trip is paid for: roads are cheap, woods are dear, and the far side of the map hears the news late.</p>

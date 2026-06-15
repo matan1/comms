@@ -127,6 +127,11 @@ distinct direct interaction issuers, caps repetition, treats objections as
 contestation, and lets buyers stop relying on a steward once two independent
 failures reach their local store.
 
+The browser controls expose the flat/Vouch appraisal choice and all 16
+adversary behaviors. Select a behavior under **Adversary laboratory**, inject
+it, and click villagers to compare their locally held evidence and Vouch
+outcomes.
+
 Run the full comparison (25 deterministic seeds per preset, 120 days):
 
 ```sh

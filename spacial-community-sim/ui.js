@@ -13,6 +13,25 @@ let phaseClock = 0;
 let selectedId = null;     // selected villager == current viewpoint
 let lastFrame = 0;
 
+const adversaryDescriptions = {
+  classic: "Defects immediately and indiscriminately once admitted.",
+  sleeper: "Builds history for 30 days before activating.",
+  selective: "Targets comparatively trusted counterparties while maintaining cover.",
+  parasite: "Harms infrequently, mixes cover with recovery, and persists.",
+  charmer: "Invests heavily in social proof before and between betrayals.",
+  ghost: "Avoids witnessed harm and lies low whenever objections appear.",
+  freeRider: "Contributes little harm at once, using social investment and recovery.",
+  cultivator: "Builds extensive cover and social standing before selective harm.",
+  factionist: "Cultivates a faction capable of distorting apparent sponsorship.",
+  infiltrator: "Waits longest, builds cover, and combines selectivity with subversion.",
+  ideologue: "Uses factional influence and selective harm with limited recovery.",
+  brinksman: "Targets only favorable victims and pushes betrayal near the limit.",
+  flash: "Attacks immediately at very high frequency with no cover.",
+  patriarch: "Builds deep standing over a long delay before activating.",
+  wrecker: "Causes immediate broad harm while investing in network subversion.",
+  sovereign: "Combines delayed, selective harm, cover, recovery, and subversion."
+};
+
 function byId(id) {
   return hasDom ? document.getElementById(id) : null;
 }
@@ -28,6 +47,8 @@ const controls = hasDom ? {
   witnessQuorum: byId("witnessQuorum"),
   objectionRate: byId("objectionRate"),
   arrivalRate: byId("arrivalRate"),
+  appraisalMode: byId("appraisalMode"),
+  adversaryPreset: byId("adversaryPreset"),
   speed: byId("speed")
 } : null;
 
@@ -47,7 +68,8 @@ const ui = hasDom ? {
 function rawFromControls() {
   const raw = {};
   for (const key of Object.keys(controls)) {
-    raw[key] = Number(controls[key].value);
+    if (key === "appraisalMode") raw.vouchMode = controls[key].value === "vouch";
+    else if (key !== "adversaryPreset") raw[key] = Number(controls[key].value);
   }
   return raw;
 }
@@ -103,6 +125,9 @@ function renderStatic() {
   const vp = viewpoint();
   ui.viewpointPill.textContent = vp ? `Seen by ${vp.label}` : "Omniscient view";
   ui.viewpointPill.classList.toggle("active", Boolean(vp));
+  byId("appraisalMode").title = params().vouchMode
+    ? "Categorical, distinct-issuer Vouch appraisal"
+    : "Legacy positive/negative tally";
 
   renderLog();
   renderInspector();
@@ -138,7 +163,7 @@ function renderInspector() {
     .map((o) => {
       const mine = perceivedTrust(v, o.id);
       const villageMean = state.cached.mean.get(o.id) ?? mine;
-      return { o, mine, gap: mine - villageMean };
+      return { o, mine, gap: mine - villageMean, vouch: perceivedVouch(v, o.id) };
     })
     .sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap))
     .slice(0, 3);
@@ -157,6 +182,7 @@ function renderInspector() {
       <div><dt>strangers to them</dt><dd>${strangers}</dd></div>
       <div><dt>trip to market</dt><dd>cost ${tripCost.toFixed(2)} · goes ~${tripChance}% of days</dd></div>
       <div><dt>capability</dt><dd>${v.capability.toFixed(2)}</dd></div>
+      <div><dt>appraisal</dt><dd>${params().vouchMode ? "Vouch profile" : "flat tally"}</dd></div>
       <div><dt>${v.member ? "joined" : "arrived"}</dt><dd>day ${v.member ? v.joinedDay : v.arrivedDay}</dd></div>
     </dl>
     ${divergences.length ? `
@@ -164,7 +190,9 @@ function renderInspector() {
       <ul class="inspector-beliefs">
         ${divergences.map((d) => `
           <li><i style="background:${colorForTrust(d.mine)}"></i>${d.o.label}:
-            sees ${Math.round(d.mine * 100)}%, village mean ${Math.round((d.mine - d.gap) * 100)}%
+            ${params().vouchMode
+              ? `${d.vouch.outcome} (${d.vouch.positive} positive / ${d.vouch.negative} negative issuers)`
+              : `sees ${Math.round(d.mine * 100)}%, village mean ${Math.round((d.mine - d.gap) * 100)}%`}
             <em>${d.gap > 0.04 ? "(hasn't heard the bad news)" : d.gap < -0.04 ? "(knows something the village doesn't)" : ""}</em>
           </li>`).join("")}
       </ul>` : ""}
@@ -227,11 +255,16 @@ function syncOutputs() {
     const out = byId(`${key}Out`);
     if (out) out.textContent = map[key](Number(controls[key].value));
   }
+  byId("adversaryDescription").textContent =
+    adversaryDescriptions[controls.adversaryPreset.value];
 }
 
 function init() {
   for (const key of Object.keys(controls)) {
-    controls[key].addEventListener("input", syncOutputs);
+    controls[key].addEventListener("input", () => {
+      syncOutputs();
+      if (key === "appraisalMode") renderStatic();
+    });
   }
   byId("runBtn").addEventListener("click", () => {
     running = !running;
@@ -242,8 +275,11 @@ function init() {
     running = false;
     reset();
   });
-  byId("injectBtn").addEventListener("click", () => {
-    injectDefector();
+  byId("injectAdversaryBtn").addEventListener("click", () => {
+    const name = controls.adversaryPreset.value;
+    injectAdversary(name);
+    logEvent("ceremony-record/1", `${name} adversary selected`,
+      adversaryDescriptions[name]);
     renderStatic();
   });
   ui.canvas.addEventListener("click", canvasClick);

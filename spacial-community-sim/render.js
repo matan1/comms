@@ -45,6 +45,13 @@ function colorForTrust(t) {
   return "#b65345";
 }
 
+function colorForVouch(outcome) {
+  if (outcome === "trusted") return "#2f7d66";
+  if (outcome === "rejected") return "#b65345";
+  if (outcome === "contested") return "#8a5a9c";
+  return "#9aa39b";
+}
+
 function hexToRgba(hex, a) {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a.toFixed(3)})`;
@@ -206,6 +213,10 @@ function drawVillagers(ctx, w, h) {
     if (vp) {
       if (v.id === vp.id) {
         fill = colorForTrust(state.cached.mean.get(v.id) ?? state.prior);
+      } else if (params().vouchMode) {
+        const judgment = perceivedVouch(vp, v.id);
+        fill = colorForVouch(judgment.outcome);
+        faded = judgment.outcome === "awaiting-context";
       } else if (isStrangerTo(vp, v.id)) {
         fill = "#9aa39b";
         faded = true;
@@ -230,7 +241,7 @@ function drawVillagers(ctx, w, h) {
 
     // Ground truth is a debug privilege: defectors are only marked when no
     // villager's viewpoint is selected.
-    if (!vp && v.archetype === "defector") {
+    if (!vp && (v.archetype === "defector" || v.archetype === "adversary")) {
       ctx.save();
       ctx.setLineDash([3, 3]);
       ctx.beginPath();

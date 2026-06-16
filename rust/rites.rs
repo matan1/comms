@@ -1,0 +1,335 @@
+//! The config-driven rite engine.
+//!
+//! A rite is an ordered list of `"verb target"` steps declared in comms.toml
+//! (see [`crate::config`]). This module supplies what the TOML does not: for
+//! each verb, where its product lives on disk (so a step's completion can be
+//! detected), and how to perform it. `status` walks a rite against the
+//! filesystem and reports position + next step; `execute_step` performs one.
+//!
+//! The tool knows its verbs; the config sequences them. Adding a profile with a
+//! different flow needs no code here as long as it uses these verbs:
+//!
+//! - `mint <session>`  — mint the session key to `<comms>/<session>.key`.
+//! - `attest <target>` — author + sign a general-claim to `<comms>/store/<target>.cbor`.
+//! - `seal <store>`    — pack `<comms>/store` and seal it to `<comms>/<rite>.bundle`.
+//! - `shred <session>` — destroy the session key (its absence is the goal).
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use crate::bundle::{author_general_claim, make_bundle, parse_attestation, ClaimSpec};
+use crate::config::{HarnessConfig, Rite, Step};
+use crate::{keyfile, now_rfc3339, personal_steward_id};
+
+fn key_path(comms_dir: &Path, target: &str) -> PathBuf {
+    comms_dir.join(format!("{target}.key"))
+}
+
+/// The session-key target a rite mints/uses (the target of its `mint` step,
+/// or the conventional `session`).
+fn session_target(rite: &Rite) -> String {
+    rite
+        .steps
+        .iter()
+        .find(|s| s.verb == "mint")
+        .and_then(|s| s.target.clone())
+        .unwrap_or_else(|| "session".to_owned())
+}
+
+/// Where a step's product lands on disk, if it has one.
+pub fn step_output(comms_dir: &Path, rite: &Rite, step: &Step) -> Option<PathBuf> {
+    let target = step.target.as_deref();
+    match step.verb.as_str() {
+        "mint" | "shred" => Some(key_path(comms_dir, target.unwrap_or("session"))),
+        "attest" => Some(
+            comms_dir
+                .join("store")
+                .join(format!("{}.cbor", target.unwrap_or("entry"))),
+        ),
+        "seal" | "pack" => Some(comms_dir.join(format!("{}.bundle", rite.name))),
+        _ => None,
+    }
+}
+
+/// Is this step satisfied by what's on disk?
+pub fn step_done(comms_dir: &Path, rite: &Rite, step: &Step) -> bool {
+    match step_output(comms_dir, rite, step) {
+        // shred's goal is the seed's *absence*.
+        Some(out) if step.verb == "shred" => !out.exists(),
+        Some(out) => out.exists(),
+        None => false,
+    }
+}
+
+/// One step plus whether it is done.
+pub struct StepView {
+    pub step: Step,
+    pub done: bool,
+}
+
+/// A rite rendered against the current filesystem.
+pub struct RiteView {
+    pub name: String,
+    pub steps: Vec<StepView>,
+    /// Index of the first pending step, if any.
+    pub next: Option<usize>,
+}
+
+impl RiteView {
+    pub fn complete(&self) -> bool {
+        self.next.is_none()
+    }
+}
+
+pub fn rite_view(comms_dir: &Path, rite: &Rite) -> RiteView {
+    // A rite is an ordered sequence: a step counts as done only if it and every
+    // prior step are satisfied. This keeps a trailing teardown like `shred`
+    // (whose raw condition — the key's absence — also holds before anything has
+    // begun) from reading as already-done at a cold start.
+    let mut steps = Vec::with_capacity(rite.steps.len());
+    let mut prior_done = true;
+    for s in &rite.steps {
+        let done = prior_done && step_done(comms_dir, rite, s);
+        prior_done = done;
+        steps.push(StepView { step: s.clone(), done });
+    }
+    let next = steps.iter().position(|s| !s.done);
+    RiteView { name: rite.name.clone(), steps, next }
+}
+
+/// Choose the rite a session is "in." Prefers one in progress (some steps
+/// done, some pending); else a pending opener (a rite that begins by minting
+/// a key); else the first rite with any pending step. Name-agnostic.
+pub fn active_rite<'a>(comms_dir: &Path, cfg: &'a HarnessConfig) -> Option<&'a Rite> {
+    let views: Vec<(&Rite, RiteView)> =
+        cfg.rites.iter().map(|r| (r, rite_view(comms_dir, r))).collect();
+
+    if let Some((r, _)) = views
+        .iter()
+        .find(|(_, v)| v.next.is_some() && v.steps.iter().any(|s| s.done))
+    {
+        return Some(r);
+    }
+    if let Some((r, _)) = views.iter().find(|(r, v)| {
+        v.next == Some(0) && r.steps.first().map(|s| s.verb == "mint").unwrap_or(false)
+    }) {
+        return Some(r);
+    }
+    views.into_iter().find(|(_, v)| v.next.is_some()).map(|(r, _)| r)
+}
+
+/// Inputs a step may need from the caller (only `attest` does, today).
+#[derive(Default)]
+pub struct ExecInputs<'a> {
+    pub body: Option<Vec<u8>>,
+    pub about: Option<&'a str>,
+    pub kind: Option<&'a str>,
+    pub media_type: Option<&'a str>,
+    pub label: &'a str,
+}
+
+/// Result of performing one step.
+#[derive(Debug)]
+pub struct ExecOutcome {
+    pub message: String,
+    pub output: Option<PathBuf>,
+}
+
+/// Perform a single rite step. `Err` carries a message naming what's missing.
+pub fn execute_step(
+    comms_dir: &Path,
+    rite: &Rite,
+    step: &Step,
+    inputs: &ExecInputs,
+) -> Result<ExecOutcome, String> {
+    let now = now_rfc3339();
+    match step.verb.as_str() {
+        "mint" => {
+            let kp = key_path(comms_dir, &session_target(rite));
+            if kp.exists() {
+                return Err(format!("session key already present at {}", kp.display()));
+            }
+            let sk = keyfile::mint(&kp, inputs.label)?;
+            let id = personal_steward_id(sk.verifying_key().as_bytes());
+            Ok(ExecOutcome {
+                message: format!("minted session key {id}"),
+                output: Some(kp),
+            })
+        }
+        "shred" => {
+            let kp = key_path(comms_dir, &session_target(rite));
+            if !kp.exists() {
+                return Ok(ExecOutcome {
+                    message: "session key already absent".to_owned(),
+                    output: Some(kp),
+                });
+            }
+            keyfile::shred(&kp)?;
+            Ok(ExecOutcome {
+                message: "session key destroyed (seed gone)".to_owned(),
+                output: Some(kp),
+            })
+        }
+        "attest" => {
+            let body = inputs
+                .body
+                .as_deref()
+                .ok_or_else(|| format!("step '{}' needs content: pass --body <file>", step.display()))?;
+            let sk = keyfile::load(&key_path(comms_dir, &session_target(rite)))?;
+            let target = step.target.as_deref().unwrap_or("entry");
+            let about = inputs.about.unwrap_or(target);
+            let spec = ClaimSpec {
+                about,
+                kind: inputs.kind.unwrap_or("testimony"),
+                body,
+                media_type: inputs.media_type.unwrap_or("text/markdown"),
+                support: &[],
+                language: "zxx",
+                community: None,
+                occasion: Some(&rite.name),
+                issued_at: &now,
+            };
+            let att = author_general_claim(&spec, &sk, "author", &now);
+            let store = comms_dir.join("store");
+            std::fs::create_dir_all(&store).map_err(|e| format!("{}: {e}", store.display()))?;
+            let out = store.join(format!("{target}.cbor"));
+            std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
+            Ok(ExecOutcome {
+                message: format!("attested {} -> {}", att.id(), out.display()),
+                output: Some(out),
+            })
+        }
+        "seal" | "pack" => {
+            let sk = keyfile::load(&key_path(comms_dir, &session_target(rite)))?;
+            let store = comms_dir.join("store");
+            let mut files: Vec<PathBuf> = std::fs::read_dir(&store)
+                .map_err(|e| format!("{}: {e}", store.display()))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().map(|x| x == "cbor").unwrap_or(false))
+                .collect();
+            files.sort();
+            if files.is_empty() {
+                return Err(format!("nothing to seal: {} has no .cbor attestations", store.display()));
+            }
+            let mut members = Vec::new();
+            for f in &files {
+                let bytes = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
+                members.push(parse_attestation(&bytes).map_err(|e| format!("{}: {e}", f.display()))?);
+            }
+            let count = members.len();
+            let seal_it = step.verb == "seal";
+            let bundle = make_bundle(
+                members,
+                HashMap::new(),
+                if seal_it { Some(&sk) } else { None },
+                &format!("{} rite", rite.name),
+                &now,
+                &now,
+                &now,
+            );
+            let out = comms_dir.join(format!("{}.bundle", rite.name));
+            std::fs::write(&out, bundle.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
+            Ok(ExecOutcome {
+                message: format!(
+                    "{} {count} attestation{} -> {}",
+                    if seal_it { "sealed" } else { "packed" },
+                    if count == 1 { "" } else { "s" },
+                    out.display()
+                ),
+                output: Some(out),
+            })
+        }
+        other => Err(format!("unknown rite verb '{other}' (step '{}')", step.display())),
+    }
+}
+
+// ---- tests -----------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{self, HarnessConfig};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    const CFG: &str = r#"
+profile = "continuity"
+[rites.open]
+steps = ["mint session", "attest entry"]
+[rites.close]
+steps = ["attest transcript", "seal store", "shred session"]
+"#;
+
+    fn scratch(tag: &str) -> PathBuf {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir()
+            .join(format!("comms-rites-{tag}-{}-{n}", std::process::id()))
+            .join(".comms");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cfg() -> HarnessConfig {
+        HarnessConfig::from_toml(&config::parse(CFG).unwrap())
+    }
+
+    #[test]
+    fn open_rite_advances_step_by_step() {
+        let comms = scratch("open");
+        let cfg = cfg();
+        let open = cfg.rite("open").unwrap();
+
+        // Cold: first step (mint) is next.
+        let v = rite_view(&comms, open);
+        assert_eq!(v.next, Some(0));
+        assert!(active_rite(&comms, &cfg).map(|r| r.name.as_str()) == Some("open"));
+
+        // mint -> the session key exists, next advances to attest.
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        assert!(step_done(&comms, open, &open.steps[0]));
+        assert_eq!(rite_view(&comms, open).next, Some(1));
+
+        // attest with no body errors helpfully; with a body it completes.
+        let needs = execute_step(&comms, open, &open.steps[1], &ExecInputs::default());
+        assert!(needs.unwrap_err().contains("--body"));
+        let inp = ExecInputs { body: Some(b"# entry\n".to_vec()), ..Default::default() };
+        execute_step(&comms, open, &open.steps[1], &inp).unwrap();
+        assert!(rite_view(&comms, open).complete());
+    }
+
+    #[test]
+    fn close_rite_seals_then_shreds_and_active_switches() {
+        let comms = scratch("close");
+        let cfg = cfg();
+        // Open first so a session key exists.
+        let open = cfg.rite("open").unwrap();
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+
+        // Now the in-progress rite is close (key present, open's attest pending
+        // too, but close has the seal/shred lifecycle). At minimum a pending
+        // rite is selected and the engine can drive close.
+        let close = cfg.rite("close").unwrap();
+        let inp = ExecInputs { body: Some(b"transcript\n".to_vec()), ..Default::default() };
+        execute_step(&comms, close, &close.steps[0], &inp).unwrap(); // attest transcript
+        execute_step(&comms, close, &close.steps[1], &ExecInputs::default()).unwrap(); // seal store
+        assert!(step_done(&comms, close, &close.steps[1]));
+        assert!(comms.join("close.bundle").is_file());
+
+        // shred: key present -> gets destroyed -> step satisfied.
+        assert!(!step_done(&comms, close, &close.steps[2]));
+        execute_step(&comms, close, &close.steps[2], &ExecInputs::default()).unwrap();
+        assert!(step_done(&comms, close, &close.steps[2]));
+        assert!(!comms.join("session.key").exists());
+    }
+
+    #[test]
+    fn mint_twice_refuses() {
+        let comms = scratch("twice");
+        let cfg = cfg();
+        let open = cfg.rite("open").unwrap();
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        let again = execute_step(&comms, open, &open.steps[0], &ExecInputs::default());
+        assert!(again.unwrap_err().contains("already present"));
+    }
+}

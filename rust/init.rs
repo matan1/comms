@@ -80,7 +80,7 @@ pub fn install(
 ) -> io::Result<Vec<Step>> {
     let root = target.join(HARNESS_DIR);
 
-    // Directories: the boundary dir itself, then each declared artifact/ritual
+    // Directories: the boundary dir itself, then each declared artifact/rite
     // dir. create_dir_all is naturally idempotent; we only *report* the ones
     // that did not already exist.
     let mut dirs: Vec<PathBuf> = vec![root.clone()];
@@ -150,7 +150,7 @@ static DEFAULT: Profile = Profile {
 
 static CONTINUITY: Profile = Profile {
     name: "continuity",
-    summary: "session ritual door: letters, transcripts, memories, pending",
+    summary: "session rite door: letters, transcripts, memories, pending",
     dirs: &[
         "store",
         "hooks",
@@ -178,8 +178,14 @@ mode = "external"
 path = "../project.comms-archive"
 index = "none"          # sqlite | none
 
-[rituals.close]
-# When an artifact required for a ritual is missing, allow a recorded waiver.
+# A rite is an ordered list of "verb target" steps the tool performs and
+# detects. `comms status` shows your position; `comms next` runs the next step.
+[rites.open]
+steps = ["mint session", "attest entry"]
+
+[rites.close]
+steps = ["seal store", "shred session"]
+# When an artifact required for a rite is missing, allow a recorded waiver.
 allow_waivers = true
 
 # Declare the artifact types your project keeps. `comms init` creates a
@@ -189,7 +195,7 @@ allow_waivers = true
 # dir = "notes"
 # default_access = "host-gated"   # host-gated | public
 # filename = "session-{num:03}.{name_or_unnamed}.md"
-# rituals = ["archive"]
+# rites = ["archive"]
 # required_for = []
 "#;
 
@@ -205,7 +211,13 @@ mode = "external"
 path = "../project.comms-archive"
 index = "sqlite"        # sqlite | none
 
-[rituals.close]
+# A rite is an ordered list of "verb target" steps the tool performs and
+# detects. `comms status` shows your position; `comms next` runs the next step.
+[rites.open]
+steps = ["mint session", "attest entry"]
+
+[rites.close]
+steps = ["attest transcript", "seal store", "shred session"]
 # A session that cannot produce a required artifact may record a waiver rather
 # than be blocked; the waiver is itself an attestation when a session key exists.
 allow_waivers = true
@@ -214,21 +226,21 @@ allow_waivers = true
 dir = "letters"
 default_access = "host-gated"
 filename = "session-{num:03}.{name_or_unnamed}.md"
-rituals = ["request", "archive"]
+rites = ["request", "archive"]
 required_for = []
 
 [artifact_types.transcripts]
 dir = "transcripts"
 default_access = "host-gated"
 filename = "session-{num:03}.{name_or_unnamed}.log"
-rituals = ["close", "seal"]
+rites = ["close", "seal"]
 required_for = ["close"]
 
 [artifact_types.memories]
 dir = "memories"
 default_access = "host-gated"
 filename = "session-{num:03}.{name_or_unnamed}.md"
-rituals = ["archive"]
+rites = ["archive"]
 required_for = []
 "#;
 
@@ -241,7 +253,7 @@ substrate.
 
 This `.comms/` directory is a door, not an inheritance:
 
-- `comms.toml` — harness configuration (archive mode, artifact types, rituals).
+- `comms.toml` — harness configuration (archive mode, artifact types, rites).
 - `policy.md`  — who this community counts as sponsor/witness; you decide.
 - `store/`     — public, content-addressed attestations kept with the repo.
 - `hooks/`     — assistive git hooks (installed separately; warn-only by default).
@@ -251,7 +263,7 @@ It is **never** loaded by default. You may request it, decline it, or ignore it.
 Requests, grants, deferrals, and denials are meant to be recorded, so the gate
 stays visible.
 
-See `harness.md` beside this file for what the harness does and which rituals
+See `harness.md` beside this file for what the harness does and which rites
 are drivable today, and the Comms Attest spec for the protocol.
 "#;
 
@@ -261,7 +273,7 @@ Comms is a protocol substrate for community-grounded attestations: signed,
 content-addressed claims. Verification here means **the math holds, not that
 trust has been decided**.
 
-This profile adds the shape of an accountable-discontinuity ritual — for
+This profile adds the shape of an accountable-discontinuity rite — for
 projects worked by a succession of sessions (human or agent):
 
 - Each session mints a fresh key at start and destroys its seed before the end,
@@ -274,7 +286,7 @@ projects worked by a succession of sessions (human or agent):
 
 Layout:
 
-- `comms.toml`    — archive mode, declared artifact types, ritual rules.
+- `comms.toml`    — archive mode, declared artifact types, rite rules.
 - `policy.md`     — your community's trust rules (the substrate decides none).
 - `store/`        — public, content-addressed attestations kept with the repo.
 - `pending/`      — staged artifacts awaiting a countersignature.
@@ -309,6 +321,10 @@ two so you are not surprised.
 `comms-verify` is a self-contained kit for authoring and moving signed,
 content-addressed attestations offline:
 
+- `status`  — read this door and report **where you are in the rite and the next
+              step**, in prose or `--json`. Start here.
+- `next`    — perform the next pending step of the active rite (mints, attests,
+              seals, or shreds as the rite declares). The config-driven workflow.
 - `init`    — install or refresh this door.
 - `mint`    — generate a steward key (`{seed_b58, label}` JSON, mode 0600).
 - `attest`  — author **and sign** a `general-claim/1` attestation from a content
@@ -321,27 +337,34 @@ content-addressed attestations offline:
 - `extract` — write a bundle's members and media back out to files.
 - `vouch`   — a candidate policy-relative evaluator (judgment, not proof).
 
-A typical authoring loop:
+## Rites are config-driven
+
+`comms.toml` declares each rite as an ordered list of `"verb target"` steps —
+the verb is one the tool performs (`mint`, `attest`, `seal`, `shred`), the target
+is what it acts on (an artifact type, or a built-in noun like `session` or
+`store`). The tool knows how to perform each verb and how to detect whether it
+has been done; the config sequences them. So a profile defines its own flow
+without new code.
 
 ```sh
-comms-verify mint   --out steward.json --label me
-comms-verify attest --key steward.json --about "session 1 letter" --kind testimony \
-                    --media-type text/markdown --body letter.md --out letter.cbor
-comms-verify pack   --out session.bundle letter.cbor --seal --key steward.json
-comms-verify verify  session.bundle
-comms-verify inspect session.bundle
+comms-verify status                         # where am I? what's next?
+comms-verify next --rite open               # mint the session key
+comms-verify next --rite open --body entry.md   # attest the opening entry
+# ... work ...
+comms-verify next --rite close --body transcript.md   # attest the transcript
+comms-verify next --rite close              # seal the store into a bundle
+comms-verify next --rite close              # shred the session key (seed gone)
 ```
 
-## What is described in config but not yet driven by the binary
+Steps that author content (`attest`) take `--body <file>`; the rest run on their
+own. `status` always shows the exact next command. `--rite` is optional — with no
+flag, `next` advances the rite you're currently in.
 
-`comms.toml` declares `[rituals.close]`, artifact types, waivers, and archive
-modes. These describe an intended **session workflow** (open → work → close,
-with required artifacts and recorded archive requests). The binary does **not**
-yet execute those rituals — there is no `comms close`, `comms request`, or
-`comms archive` verb. Until there is, treat `comms.toml` as the declaration of
-intent and drive the workflow with `attest` + `pack` + `seal` by hand, or with
-the reference ceremony in the upstream comms project. This gap is known and is
-the next slab of work.
+## Still by hand (for now)
+
+`archive`/`request` are not yet rite verbs: archive access (and its grants,
+deferrals, and denials) is still recorded out of band. Declared `required_for`
+artifacts are not yet enforced at `seal`/close. Those are the next increments.
 
 ## The stance
 

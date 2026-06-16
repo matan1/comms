@@ -33,6 +33,9 @@ init    [dir] [--profile P]       install the .comms/ harness door into a repo
 attest  --key <k.json> --about S --kind S --body <file|->   author + sign a
         [--media-type T] [--language L] [--community C]      general-claim/1
         [--occasion O] [--role R] [--support ID]... [--out F] (default <id>.cbor)
+status  [dir] [--json]            where you are in the rite + the next step
+next    [dir] [--rite N]          perform the next pending step of a rite
+        [--body F] [--about S] [--kind K]  (attest steps need --body)
 verify  <bundle>                 check the A1.8 integrity seal (default; bare
                                  path also works: `comms-verify b.cbor`)
 inspect <bundle> [--json]        verify EVERY member on its own terms
@@ -59,7 +62,7 @@ comms-verify init --force              # rewrite door files from the template
 ```
 
 - **`default`** — minimal door: config, `policy.md`, `store/`, `hooks/`.
-- **`continuity`** — adds the session-ritual shape: `letters/`, `transcripts/`,
+- **`continuity`** — adds the session-rite shape: `letters/`, `transcripts/`,
   `memories/`, `pending/`, and the matching `[artifact_types.*]` declarations.
 
 Installation is idempotent: existing files are kept (a local edit survives a
@@ -94,6 +97,40 @@ a trust judgment.
 `pack` now accepts a media-only bundle (no `.cbor` members) and warns, rather
 than silently packing zero members, when a directory contributes no
 attestations.
+
+### status / next — drive a rite from comms.toml
+
+The harness workflow is config-driven, not hardcoded. A profile's `comms.toml`
+declares each **rite** as an ordered list of `"verb target"` steps; the binary
+knows how to perform each verb (`mint`, `attest`, `seal`, `shred`) and how to
+detect whether it has been done, so a profile defines its own flow without new
+code. `status` reports position; `next` performs the next pending step.
+
+```toml
+[rites.open]
+steps = ["mint session", "attest entry"]
+
+[rites.close]
+steps = ["attest transcript", "seal store", "shred session"]
+```
+
+```sh
+comms-verify status                         # where am I? what's next?
+comms-verify next --rite open               # mint the session key
+comms-verify next --rite open --body e.md   # attest the opening entry
+comms-verify next --rite close --body t.md  # attest the transcript
+comms-verify next --rite close              # seal the store -> close.bundle
+comms-verify next --rite close              # shred the session key
+```
+
+A rite is treated as an ordered sequence (a step is done only if it and all
+prior steps are), so a trailing `shred` does not read as done before the session
+has begun. Targets are an artifact-type name or a built-in noun (`session`, the
+key at `.comms/<target>.key`; `store`, the `.comms/store` dir to seal). `status`
+prints the exact next command, and `--json` gives a successor agent a
+machine-readable "current state + next action." A small dependency-free reader
+handles the `comms.toml` subset (dotted tables, strings, bools, string arrays)
+so the binary stays a single static file.
 
 ### verify vs inspect
 

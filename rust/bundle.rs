@@ -608,7 +608,7 @@ pub struct ClaimSpec<'a> {
 }
 
 /// Author and personally sign a `general-claim/1` attestation — the creation
-/// path the harness rituals (letters, transcripts, memories, …) need. It is the
+/// path the harness rites (letters, transcripts, memories, …) need. It is the
 /// general-purpose sibling of `build_seal`, which authors the one specific
 /// general-claim that is a bundle seal. The result is a layer-1 artifact: a
 /// well-formed, signed claim. Whether anyone should *believe* it is a trust

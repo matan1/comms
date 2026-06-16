@@ -13,9 +13,11 @@ use comms_core::bundle::{
     author_general_claim, build_seal, inspect_bundle, make_bundle, media_key, parse_attestation,
     parse_bundle, verify_seal, Bundle, ClaimSpec, InspectReport,
 };
+use comms_core::config::{self, HarnessConfig};
 use comms_core::init::{install, profile_by_name, profile_names};
-use comms_core::personal_steward_id;
+use comms_core::rites::{self, ExecInputs};
 use comms_core::steward::Attestation;
+use comms_core::{now_rfc3339, personal_steward_id};
 use comms_core::vouch::{evaluate, judgment_receipt, Evaluation, Query, ENGINE};
 use ed25519_dalek::SigningKey;
 
@@ -33,6 +35,8 @@ fn main() {
         }
         Some("init") => cmd_init(&argv[1..]),
         Some("attest") => cmd_attest(&argv[1..]),
+        Some("status") => cmd_status(&argv[1..]),
+        Some("next") => cmd_next(&argv[1..]),
         Some("verify") => cmd_verify(&argv[1..]),
         Some("inspect") => cmd_inspect(&argv[1..]),
         Some("seal") => cmd_seal(&argv[1..]),
@@ -55,6 +59,8 @@ fn usage() {
     eprintln!("  attest  --key <k> --about S --kind S --body <file|-> [--media-type T]");
     eprintln!("          [--language L] [--community C] [--occasion O] [--role R]");
     eprintln!("          [--support ID]... [--out FILE]   author + sign a general-claim/1");
+    eprintln!("  status  [dir] [--json]           where you are in the rite + next step");
+    eprintln!("  next    [dir] [--rite N] [--body F] [--about S]   perform the next step");
     eprintln!("  verify  <bundle>                 check the A1.8 integrity seal (default)");
     eprintln!("  inspect <bundle> [--json]        verify every member on its own terms");
     eprintln!("  seal    <bundle> --key <k> [--out <p>] [--description S] [--*-at T]");
@@ -160,31 +166,6 @@ fn os_random_32() -> [u8; 32] {
     let mut buf = [0u8; 32];
     f.read_exact(&mut buf).unwrap_or_else(|e| die(format!("reading randomness: {e}")));
     buf
-}
-
-/// RFC 3339 UTC, second precision, `Z` suffix (the A1.6 canonical timestamp).
-fn now_rfc3339() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let days = (secs / 86400) as i64;
-    let rem = secs % 86400;
-    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    // civil_from_days (Howard Hinnant): epoch day 0 == 1970-01-01.
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    if m <= 2 {
-        y += 1;
-    }
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
 }
 
 /// Pull --created-at/--issued-at/--signed-at, each defaulting to now.
@@ -295,6 +276,169 @@ fn read_stdin() -> Vec<u8> {
         .read_to_end(&mut buf)
         .unwrap_or_else(|e| die(format!("reading stdin: {e}")));
     buf
+}
+
+// ---- status / next (the rite engine) -------------------------------------
+
+/// Resolve the `.comms/` directory from an optional path: the path itself if it
+/// holds a comms.toml, else `<path>/.comms`.
+fn resolve_comms_dir(arg: Option<&str>) -> std::path::PathBuf {
+    let base = std::path::Path::new(arg.unwrap_or("."));
+    if base.join("comms.toml").is_file() {
+        base.to_path_buf()
+    } else {
+        base.join(".comms")
+    }
+}
+
+/// The flags `next` would need to perform `step`, for display in `status`.
+fn step_hint(step: &comms_core::config::Step) -> &'static str {
+    if step.verb == "attest" {
+        " --body <file> [--about S] [--kind K]"
+    } else {
+        ""
+    }
+}
+
+fn cmd_status(args: &[String]) {
+    let o = parse_opts(args);
+    let comms_dir = resolve_comms_dir(o.positionals.first().map(String::as_str));
+    let cfg = config::load(&comms_dir).unwrap_or_else(|e| die(e));
+    let active = rites::active_rite(&comms_dir, &cfg);
+
+    if o.has("--json") {
+        print!("{}", status_json(&comms_dir, &cfg, active));
+        return;
+    }
+
+    let archive = cfg
+        .archive_mode
+        .as_deref()
+        .map(|m| format!(", archive {m}"))
+        .unwrap_or_default();
+    println!("comms: profile '{}'{archive}", cfg.profile);
+    if cfg.rites.is_empty() {
+        println!("  (no rites declared in comms.toml)");
+    }
+    for r in &cfg.rites {
+        let v = rites::rite_view(&comms_dir, r);
+        let here = active.map(|a| a.name == r.name).unwrap_or(false);
+        println!(
+            "\n  rite {}{}  [{}]",
+            r.name,
+            if here { " *" } else { "" },
+            if v.complete() { "complete" } else { "in progress" }
+        );
+        for (i, sv) in v.steps.iter().enumerate() {
+            let glyph = if sv.done {
+                "✓"
+            } else if Some(i) == v.next {
+                "→"
+            } else {
+                "·"
+            };
+            println!("    {glyph} {}", sv.step.display());
+        }
+    }
+
+    match active.map(|r| (r, rites::rite_view(&comms_dir, r))) {
+        Some((r, v)) => {
+            if let Some(i) = v.next {
+                let step = &r.steps[i];
+                println!("\nnext: {} → {}", r.name, step.display());
+                println!("  run: comms-verify next --rite {}{}", r.name, step_hint(step));
+            }
+        }
+        None => println!("\nall declared rites complete."),
+    }
+}
+
+fn status_json(
+    comms_dir: &std::path::Path,
+    cfg: &HarnessConfig,
+    active: Option<&comms_core::config::Rite>,
+) -> String {
+    let rites_json: Vec<_> = cfg
+        .rites
+        .iter()
+        .map(|r| {
+            let v = rites::rite_view(comms_dir, r);
+            serde_json::json!({
+                "name": r.name,
+                "complete": v.complete(),
+                "steps": v.steps.iter().enumerate().map(|(i, s)| serde_json::json!({
+                    "step": s.step.display(),
+                    "verb": s.step.verb,
+                    "done": s.done,
+                    "next": Some(i) == v.next,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    let next = active.and_then(|r| {
+        let v = rites::rite_view(comms_dir, r);
+        v.next.map(|i| {
+            let step = &r.steps[i];
+            serde_json::json!({
+                "rite": r.name,
+                "step": step.display(),
+                "command": format!("comms-verify next --rite {}{}", r.name, step_hint(step)),
+            })
+        })
+    });
+
+    let out = serde_json::json!({
+        "profile": cfg.profile,
+        "archive_mode": cfg.archive_mode,
+        "active_rite": active.map(|r| r.name.clone()),
+        "rites": rites_json,
+        "next": next,
+    });
+    format!("{}\n", serde_json::to_string_pretty(&out).unwrap())
+}
+
+fn cmd_next(args: &[String]) {
+    let o = parse_opts(args);
+    let comms_dir = resolve_comms_dir(o.positionals.first().map(String::as_str));
+    let cfg = config::load(&comms_dir).unwrap_or_else(|e| die(e));
+
+    let rite = match o.get("--rite") {
+        Some(name) => cfg
+            .rite(name)
+            .unwrap_or_else(|| die(format!("no rite '{name}' declared in comms.toml"))),
+        None => rites::active_rite(&comms_dir, &cfg)
+            .unwrap_or_else(|| die("no rite in progress; nothing to do")),
+    };
+
+    let view = rites::rite_view(&comms_dir, rite);
+    let Some(i) = view.next else {
+        die(format!("rite '{}' is already complete", rite.name));
+    };
+    let step = &rite.steps[i];
+
+    let body = o.get("--body").map(|p| if p == "-" { read_stdin() } else { read_file(p) });
+    let inputs = ExecInputs {
+        body,
+        about: o.get("--about"),
+        kind: o.get("--kind"),
+        media_type: o.get("--media-type"),
+        label: o.get("--label").unwrap_or(""),
+    };
+
+    match rites::execute_step(&comms_dir, rite, step, &inputs) {
+        Ok(outcome) => {
+            println!("[{}] {} — {}", rite.name, step.display(), outcome.message);
+            match rites::rite_view(&comms_dir, rite).next {
+                Some(j) => {
+                    let nstep = &rite.steps[j];
+                    println!("next: {}  (comms-verify next --rite {}{})", nstep.display(), rite.name, step_hint(nstep));
+                }
+                None => println!("rite '{}' complete.", rite.name),
+            }
+        }
+        Err(e) => die(e),
+    }
 }
 
 // ---- verify ----------------------------------------------------------------

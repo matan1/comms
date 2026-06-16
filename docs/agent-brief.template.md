@@ -23,5 +23,6 @@ See /home/agent/work/this.vm.your.task.txt for tooling and VM environment detail
 
 ## Read next (in order)
 
-1. `SOURCE/docs/project-primer.md` — architecture, build commands, Gradle/manifest invariants
-2. `(if you haven't already) REPO/CLAUDE.md` — code style and agent behavioral guidance
+1. 'README.md' - most concise assement, ideal for resource constrained sessions
+2. `SOURCE/docs/project-primer.md` — architecture, build commands, Gradle/manifest invariants
+3. `(if you haven't already) REPO/CLAUDE.md` — code style and agent behavioral guidance

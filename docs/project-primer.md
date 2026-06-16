@@ -1,7 +1,10 @@
 # Comms — Project Primer
 
-Orientation for anyone (human or agent) starting work in this repository. Read
-this before diving into the code. For protocol details see
+Orientation for anyone (human or agent) starting work in this repository. 
+Basic concise primer (read only this in resource constrained sessions and then interogate): repo/README.md
+
+
+Read this document before diving into the code. For protocol details see
 `docs/comms.spec.1.0.md`; for the most recent state assessment see
 `docs/logs/`.
 

@@ -167,7 +167,16 @@ A continuity trial governs agent memory across sessions, constituted in
 are a session agent reading this cold: **an archive of prior sessions' notes
 and letters exists, held by the maintainer, available on request — it is
 deliberately not auto-loaded.** You may ask for it, or not; either choice and
-your reasoning will be recorded in the trial log. To check the trial's
+your reasoning will be recorded in the trial log.
+
+**Mechanism (as of session 9):** the trial runs on the embeddable Rust harness —
+`rust/target/release/comms-verify` with the `continuity` profile and its
+`.comms/` door (`init`, `status`, `next`, `attest`, `seal`). Run
+`comms-verify status` to see where you are in a rite and the next step, and
+`comms-verify init . --profile continuity` if the door is absent. The Python
+`scripts/continuity_ceremony.py` carried sessions 0–8 and is retained as the
+reference implementation of the rites (its docstring marks it retired); prefer
+the harness for new work. To check the trial's
 attested history first: `python scripts/continuity_ceremony.py verify`. For the
 same checks rendered as legible, colored "tumblers" (signatures, references,
 law, record, durability — each its own sign, never collapsed into one

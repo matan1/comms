@@ -69,13 +69,25 @@ fn attest_output(comms_dir: &Path, rite: &Rite, target: &str) -> PathBuf {
     comms_dir.join("store").join(name)
 }
 
+/// Where a `seal`/`pack` step writes its bundle. Scoped by session tag for the
+/// same reason as attest outputs: otherwise the first session's bundle persists
+/// and every later session's `seal` reads as already-done and is skipped, so
+/// only the first session ever gets a sealed record.
+fn bundle_output(comms_dir: &Path, rite: &Rite) -> PathBuf {
+    let name = match session_tag(comms_dir, rite) {
+        Some(tag) => format!("{}.{tag}.bundle", rite.name),
+        None => format!("{}.bundle", rite.name),
+    };
+    comms_dir.join(name)
+}
+
 /// Where a step's product lands on disk, if it has one.
 pub fn step_output(comms_dir: &Path, rite: &Rite, step: &Step) -> Option<PathBuf> {
     let target = step.target.as_deref();
     match step.verb.as_str() {
         "mint" | "shred" => Some(key_path(comms_dir, target.unwrap_or("session"))),
         "attest" => Some(attest_output(comms_dir, rite, target.unwrap_or("entry"))),
-        "seal" | "pack" => Some(comms_dir.join(format!("{}.bundle", rite.name))),
+        "seal" | "pack" => Some(bundle_output(comms_dir, rite)),
         _ => None,
     }
 }
@@ -260,7 +272,7 @@ pub fn execute_step(
                 &now,
                 &now,
             );
-            let out = comms_dir.join(format!("{}.bundle", rite.name));
+            let out = bundle_output(comms_dir, rite);
             std::fs::write(&out, bundle.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(ExecOutcome {
                 message: format!(
@@ -347,7 +359,8 @@ steps = ["attest transcript", "seal store", "shred session"]
         execute_step(&comms, close, &close.steps[0], &inp).unwrap(); // attest transcript
         execute_step(&comms, close, &close.steps[1], &ExecInputs::default()).unwrap(); // seal store
         assert!(step_done(&comms, close, &close.steps[1]));
-        assert!(comms.join("close.bundle").is_file());
+        // The bundle is session-scoped (close.<tag>.bundle), not a bare name.
+        assert!(step_output(&comms, close, &close.steps[1]).unwrap().is_file());
 
         // shred: key present -> gets destroyed -> step satisfied.
         assert!(!step_done(&comms, close, &close.steps[2]));
@@ -380,6 +393,40 @@ steps = ["attest transcript", "seal store", "shred session"]
             .filter(|n| n.starts_with("entry.") && n.ends_with(".cbor"))
             .collect();
         assert_eq!(entries.len(), 2, "second session must not overwrite the first: {entries:?}");
+    }
+
+    #[test]
+    fn each_session_seals_its_own_bundle() {
+        // Regression: a persisting bundle name made every session after the
+        // first read `seal` as already-done, so only session 1 got a sealed
+        // record. The bundle must be session-scoped like the store members.
+        let comms = scratch("multiseal");
+        let cfg = cfg();
+        let open = cfg.rite("open").unwrap();
+        let close = cfg.rite("close").unwrap();
+        let tx = || ExecInputs { body: Some(b"t\n".to_vec()), ..Default::default() };
+
+        // Session A: open (mint+entry), then close (transcript, seal, shred).
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        execute_step(&comms, open, &open.steps[1], &tx()).unwrap();
+        for s in &close.steps {
+            execute_step(&comms, close, s, &tx()).unwrap();
+        }
+        let bundle_a = step_output(&comms, close, &close.steps[1]).unwrap();
+        assert!(bundle_a.is_file());
+
+        // Session B: fresh key, attest transcript — now `seal` must be PENDING
+        // (its scoped bundle does not exist yet), not silently skipped.
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        execute_step(&comms, close, &close.steps[0], &tx()).unwrap();
+        assert!(
+            !step_done(&comms, close, &close.steps[1]),
+            "session B's seal must not inherit session A's bundle"
+        );
+        execute_step(&comms, close, &close.steps[1], &ExecInputs::default()).unwrap();
+        let bundle_b = step_output(&comms, close, &close.steps[1]).unwrap();
+        assert!(bundle_b.is_file());
+        assert_ne!(bundle_a, bundle_b, "each session must seal a distinct bundle");
     }
 
     #[test]

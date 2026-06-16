@@ -28,6 +28,8 @@ binary is statically linkable and travels well.
 ```
 comms-verify <command> [args]
 
+init    [dir] [--profile P]       install the .comms/ harness door into a repo
+        [--dry-run] [--force]     (profiles: default, continuity; default dir: .)
 verify  <bundle>                 check the A1.8 integrity seal (default; bare
                                  path also works: `comms-verify b.cbor`)
 inspect <bundle> [--json]        verify EVERY member on its own terms
@@ -38,6 +40,31 @@ pack    --out <bundle> <att.cbor|dir>... [--media F]...
 extract <bundle> --out <dir>     write each member <id>.cbor and media blob to disk
 mint    --out <k.json> [--label L]   generate a steward key for sealing
 ```
+
+### init — install the door
+
+`comms-verify init` writes the embeddable harness boundary (`docs/embeddable-harness-v1.md`)
+into a repo: a `.comms/` directory holding `comms.toml`, `door.md`, `policy.md`,
+a public `store/`, `hooks/`, and a directory for each artifact type the profile
+declares. It is the step Codex's install flow opens with.
+
+```sh
+comms-verify init                      # default profile, into the current repo
+comms-verify init path/to/repo --profile continuity
+comms-verify init --dry-run            # preview the plan, touch nothing
+comms-verify init --force              # rewrite door files from the template
+```
+
+- **`default`** — minimal door: config, `policy.md`, `store/`, `hooks/`.
+- **`continuity`** — adds the session-ritual shape: `letters/`, `transcripts/`,
+  `memories/`, `pending/`, and the matching `[artifact_types.*]` declarations.
+
+Installation is idempotent: existing files are kept (a local edit survives a
+re-`init`) unless `--force` is given. `init` only writes the door — it never
+imports an archive, mints a key, or decides trust. Built-in profiles are the
+single source of truth for both the `comms.toml` text and the directories
+created; merging user/repo/archive config layers per the design's precedence
+chain is a later slab.
 
 ### verify vs inspect
 

@@ -8,6 +8,7 @@
 
 pub mod bundle;
 pub mod cbor;
+pub mod init;
 pub mod steward;
 pub mod vouch;
 

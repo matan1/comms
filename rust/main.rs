@@ -13,6 +13,7 @@ use comms_core::bundle::{
     build_seal, inspect_bundle, make_bundle, media_key, parse_attestation, parse_bundle,
     verify_seal, Bundle, InspectReport,
 };
+use comms_core::init::{install, profile_by_name, profile_names};
 use comms_core::personal_steward_id;
 use comms_core::steward::Attestation;
 use comms_core::vouch::{evaluate, judgment_receipt, Evaluation, Query, ENGINE};
@@ -30,6 +31,7 @@ fn main() {
             usage();
             process::exit(0);
         }
+        Some("init") => cmd_init(&argv[1..]),
         Some("verify") => cmd_verify(&argv[1..]),
         Some("inspect") => cmd_inspect(&argv[1..]),
         Some("seal") => cmd_seal(&argv[1..]),
@@ -48,6 +50,7 @@ fn usage() {
     eprintln!("The portable sneakernet kit for Comms Attest 1.0 bundles.");
     eprintln!();
     eprintln!("commands:");
+    eprintln!("  init    [dir] [--profile P] [--dry-run] [--force]  install the .comms/ door");
     eprintln!("  verify  <bundle>                 check the A1.8 integrity seal (default)");
     eprintln!("  inspect <bundle> [--json]        verify every member on its own terms");
     eprintln!("  seal    <bundle> --key <k> [--out <p>] [--description S] [--*-at T]");
@@ -86,7 +89,7 @@ struct Opts {
 }
 
 fn parse_opts(args: &[String]) -> Opts {
-    const BOOLS: &[&str] = &["--seal", "--json"];
+    const BOOLS: &[&str] = &["--seal", "--json", "--dry-run", "--force"];
     let mut o = Opts::default();
     let mut i = 0;
     while i < args.len() {
@@ -185,6 +188,42 @@ fn timestamps(o: &Opts) -> (String, String, String) {
         o.get("--issued-at").map(str::to_owned).unwrap_or_else(|| now.clone()),
         o.get("--signed-at").map(str::to_owned).unwrap_or(now),
     )
+}
+
+// ---- init ------------------------------------------------------------------
+
+fn cmd_init(args: &[String]) {
+    let o = parse_opts(args);
+    let target = o.positionals.first().map(String::as_str).unwrap_or(".");
+    let profile_name = o.get("--profile").unwrap_or("default");
+    let profile = profile_by_name(profile_name).unwrap_or_else(|| {
+        die(format!(
+            "unknown profile '{profile_name}' (have: {})",
+            profile_names().join(", ")
+        ))
+    });
+
+    let dry = o.has("--dry-run");
+    let force = o.has("--force");
+    let steps = install(profile, std::path::Path::new(target), force, dry)
+        .unwrap_or_else(|e| die(format!("init failed: {e}")));
+
+    let where_ = if target == "." { "here".to_owned() } else { target.to_owned() };
+    if dry {
+        println!("init (dry run): profile '{}' into {where_}", profile.name);
+    } else {
+        println!("init: profile '{}' into {where_}", profile.name);
+    }
+    if steps.is_empty() {
+        println!("  (nothing to do — door already present)");
+    } else {
+        for s in &steps {
+            println!("{}", s.render());
+        }
+    }
+    if !dry {
+        println!("the door is the .comms/ dir; edit policy.md and comms.toml to fit your community.");
+    }
 }
 
 // ---- verify ----------------------------------------------------------------

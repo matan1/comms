@@ -44,3 +44,15 @@ transcript and the attestations are **complementary**: the transcript witnesses
 the conversation; the attestations carry the canonical content. Worth weighing
 whether the constitution (Article 6) should state this scope explicitly; left to
 the historian.
+
+## `destroy-key` leaves commit-key's exported signing key behind (session 6 finding)
+
+At session 6 close, `destroy-key` shredded `continuity/session.key` (the Steward
+seed) but **not** `continuity/session-signing.key` — the OpenSSH-format copy of
+the *same* private key that `commit-key` writes. The seed therefore survived
+`destroy-key` in that second file. Seam shredded it manually (overwrite + unlink)
+to honor Article 1, but the tool should do it: `destroy-key` (or `uncommit-key`)
+should also shred `session-signing.key` / `session-signing.key.pub`, or
+`commit-key` should register them for destruction. Recorded by Seam after the
+seed was already released, hence uncommitted — commit this as the historian, and
+ideally fix `destroy-key` in a future session.

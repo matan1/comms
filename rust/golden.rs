@@ -7,7 +7,10 @@
 
 use std::collections::HashMap;
 
-use comms_core::bundle::{build_seal, make_bundle, media_key, parse_bundle, verify_seal, Bundle};
+use comms_core::bundle::{
+    author_general_claim, build_seal, make_bundle, media_key, parse_bundle, verify_seal, Bundle,
+    ClaimSpec,
+};
 use comms_core::steward::{
     community_id, community_sign, verify_chain, verify_community_attestation, Attestation,
     Descriptor, SignatureObject, StewardError,
@@ -575,4 +578,54 @@ fn bundle_smuggled_member_fails() {
         "extra must contain the smuggled member id"
     );
     assert!(report.missing.is_empty());
+}
+
+/// The create-side path (`author_general_claim`, the engine behind
+/// `comms-verify attest`) must reproduce the published general-claim vector
+/// byte-for-byte: same canonical core, same id, same deterministic author
+/// signature. This pins authoring to the Python reference the same way the
+/// seal golden pins `build_seal`.
+#[test]
+fn author_general_claim_reproduces_the_reference_vector() {
+    let j: serde_json::Value = serde_json::from_str(ATTEST_VECTORS).unwrap();
+    let v = &j["vectors"][0];
+
+    // Source the authoring inputs from the authoritative canonical core bytes
+    // (the display `core` JSON does not carry the raw body), then prove we can
+    // reconstruct those exact bytes from the semantic inputs.
+    let original = hex::decode(v["canonical_core_cbor_hex"].as_str().unwrap()).unwrap();
+    let core = cbor::decode(&original).unwrap();
+    let claim = core.get("c").unwrap();
+    let content = claim.get("content").unwrap();
+    let frame = core.get("f").unwrap();
+
+    let body = content.get("body").and_then(Value::as_bytes).unwrap().to_vec();
+    let spec = ClaimSpec {
+        about: claim.get("about").and_then(Value::as_text).unwrap(),
+        kind: claim.get("kind").and_then(Value::as_text).unwrap(),
+        body: &body,
+        media_type: content.get("media_type").and_then(Value::as_text).unwrap(),
+        support: &[],
+        language: frame.get("language").and_then(Value::as_text).unwrap(),
+        community: None,
+        occasion: None,
+        issued_at: frame.get("issued_at").and_then(Value::as_text).unwrap(),
+    };
+
+    let sig = &v["signatures"][0];
+    // The author key is seed 01*32 per the vectors' key table.
+    let sk = SigningKey::from_bytes(&hex32(&"01".repeat(32)));
+    let att = author_general_claim(&spec, &sk, sig["role"].as_str().unwrap(), sig["signed_at"].as_str().unwrap());
+
+    assert_eq!(
+        hex::encode(cbor::encode(&att.core)),
+        v["canonical_core_cbor_hex"].as_str().unwrap(),
+        "authored core must match the reference bytes"
+    );
+    assert_eq!(att.id(), v["attestation_id"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(&att.signatures[0].signature),
+        sig["signature_hex"].as_str().unwrap(),
+        "deterministic author signature must match the reference"
+    );
 }

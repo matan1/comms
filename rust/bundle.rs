@@ -588,6 +588,88 @@ pub fn build_seal(
     }
 }
 
+/// What to assert in a `general-claim/1` attestation. Mirrors the parameters of
+/// the Python reference `comms/claims.py:general_claim` plus the frame fields
+/// `comms/attest.py:Attestation.build` adds, so an attestation authored here is
+/// byte-identical to the Python one given the same inputs (canonical CBOR sorts
+/// map keys, so field order does not matter).
+pub struct ClaimSpec<'a> {
+    pub about: &'a str,
+    pub kind: &'a str,
+    pub body: &'a [u8],
+    /// Per A1.6 the body travels as bytes regardless of media type.
+    pub media_type: &'a str,
+    /// Claim-level supporting attestation ids (the `support` list).
+    pub support: &'a [String],
+    pub language: &'a str,
+    pub community: Option<&'a str>,
+    pub occasion: Option<&'a str>,
+    pub issued_at: &'a str,
+}
+
+/// Author and personally sign a `general-claim/1` attestation — the creation
+/// path the harness rituals (letters, transcripts, memories, …) need. It is the
+/// general-purpose sibling of `build_seal`, which authors the one specific
+/// general-claim that is a bundle seal. The result is a layer-1 artifact: a
+/// well-formed, signed claim. Whether anyone should *believe* it is a trust
+/// judgment that lives nowhere in this crate.
+pub fn author_general_claim(
+    spec: &ClaimSpec,
+    sk: &SigningKey,
+    role: &str,
+    signed_at: &str,
+) -> Attestation {
+    let claim = Value::Map(vec![
+        (Value::text("t"), Value::text("general-claim/1")),
+        (Value::text("about"), Value::text(spec.about)),
+        (Value::text("kind"), Value::text(spec.kind)),
+        (
+            Value::text("content"),
+            Value::Map(vec![
+                (Value::text("media_type"), Value::text(spec.media_type)),
+                (Value::text("body"), Value::Bytes(spec.body.to_vec())),
+            ]),
+        ),
+        (
+            Value::text("support"),
+            Value::Array(spec.support.iter().map(|s| Value::text(s)).collect()),
+        ),
+    ]);
+
+    let mut frame = vec![
+        (Value::text("issued_at"), Value::text(spec.issued_at)),
+        (Value::text("language"), Value::text(spec.language)),
+    ];
+    if let Some(c) = spec.community {
+        frame.push((Value::text("community"), Value::text(c)));
+    }
+    if let Some(o) = spec.occasion {
+        frame.push((Value::text("occasion"), Value::text(o)));
+    }
+
+    let core = Value::Map(vec![
+        (Value::text("v"), Value::U64(1)),
+        (Value::text("t"), Value::text("comms.attestation/1")),
+        (Value::text("c"), claim),
+        (Value::text("f"), Value::Map(frame)),
+        (Value::text("r"), Value::Array(Vec::new())),
+    ]);
+
+    let by = personal_steward_id(sk.verifying_key().as_bytes());
+    let signature = personal_sign(&core, sk, role, signed_at).to_vec();
+    Attestation {
+        core,
+        signatures: vec![SignatureObject {
+            by,
+            alg: "ed25519".to_owned(),
+            role: role.to_owned(),
+            signed_at: signed_at.to_owned(),
+            keyset: None,
+            signature,
+        }],
+    }
+}
+
 /// Assemble a bundle from `members` (+ optional `media`), optionally sealing it
 /// with `sealer`. Port of `comms/bundle.py:make`: when a sealer is given an
 /// A1.8 seal is appended, and an informational bundle manifest is attached when

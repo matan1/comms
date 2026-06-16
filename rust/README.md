@@ -30,12 +30,15 @@ comms-verify <command> [args]
 
 init    [dir] [--profile P]       install the .comms/ harness door into a repo
         [--dry-run] [--force]     (profiles: default, continuity; default dir: .)
+attest  --key <k.json> --about S --kind S --body <file|->   author + sign a
+        [--media-type T] [--language L] [--community C]      general-claim/1
+        [--occasion O] [--role R] [--support ID]... [--out F] (default <id>.cbor)
 verify  <bundle>                 check the A1.8 integrity seal (default; bare
                                  path also works: `comms-verify b.cbor`)
 inspect <bundle> [--json]        verify EVERY member on its own terms
 seal    <bundle> --key <k.json> [--out <p>] [--description S]
                                  [--created-at T] [--issued-at T] [--signed-at T]
-pack    --out <bundle> <att.cbor|dir>... [--media F]...
+pack    --out <bundle> [<att.cbor|dir>...] [--media F]...
                                  [--seal --key <k.json>] [--description S] [--*-at T]
 extract <bundle> --out <dir>     write each member <id>.cbor and media blob to disk
 mint    --out <k.json> [--label L]   generate a steward key for sealing
@@ -65,6 +68,32 @@ imports an archive, mints a key, or decides trust. Built-in profiles are the
 single source of truth for both the `comms.toml` text and the directories
 created; merging user/repo/archive config layers per the design's precedence
 chain is a later slab.
+
+### attest — author a primary attestation
+
+`pack` and `seal` move attestations that already exist; `attest` is how you
+create one. It authors a `general-claim/1` (a letter, transcript, memory, or any
+statement) from a content file and signs it with a steward key, writing the
+`<id>.cbor` envelope. It is the create-side sibling of the seal builder, and it
+is byte-identical to the Python reference for the same inputs (a golden test
+pins this against the published vector).
+
+```sh
+comms-verify mint   --out steward.json --label me
+comms-verify attest --key steward.json --about "session 8 letter" --kind testimony \
+                    --media-type text/markdown --body letter.md --out letter.cbor
+comms-verify pack   --out session.bundle letter.cbor --seal --key steward.json
+```
+
+`--body -` reads stdin. `--kind` follows the spec set (observation, synthesis,
+prediction, testimony, translation, other); `--media-type` defaults to
+`text/plain;charset=utf-8`; `--support ID` (repeatable) adds claim-level
+supporting ids. A signed attestation is layer-1 — well-formed and signed — never
+a trust judgment.
+
+`pack` now accepts a media-only bundle (no `.cbor` members) and warns, rather
+than silently packing zero members, when a directory contributes no
+attestations.
 
 ### verify vs inspect
 

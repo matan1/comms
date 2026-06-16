@@ -10,8 +10,8 @@ use std::io::Read;
 use std::process;
 
 use comms_core::bundle::{
-    build_seal, inspect_bundle, make_bundle, media_key, parse_attestation, parse_bundle,
-    verify_seal, Bundle, InspectReport,
+    author_general_claim, build_seal, inspect_bundle, make_bundle, media_key, parse_attestation,
+    parse_bundle, verify_seal, Bundle, ClaimSpec, InspectReport,
 };
 use comms_core::init::{install, profile_by_name, profile_names};
 use comms_core::personal_steward_id;
@@ -32,6 +32,7 @@ fn main() {
             process::exit(0);
         }
         Some("init") => cmd_init(&argv[1..]),
+        Some("attest") => cmd_attest(&argv[1..]),
         Some("verify") => cmd_verify(&argv[1..]),
         Some("inspect") => cmd_inspect(&argv[1..]),
         Some("seal") => cmd_seal(&argv[1..]),
@@ -51,6 +52,9 @@ fn usage() {
     eprintln!();
     eprintln!("commands:");
     eprintln!("  init    [dir] [--profile P] [--dry-run] [--force]  install the .comms/ door");
+    eprintln!("  attest  --key <k> --about S --kind S --body <file|-> [--media-type T]");
+    eprintln!("          [--language L] [--community C] [--occasion O] [--role R]");
+    eprintln!("          [--support ID]... [--out FILE]   author + sign a general-claim/1");
     eprintln!("  verify  <bundle>                 check the A1.8 integrity seal (default)");
     eprintln!("  inspect <bundle> [--json]        verify every member on its own terms");
     eprintln!("  seal    <bundle> --key <k> [--out <p>] [--description S] [--*-at T]");
@@ -85,6 +89,7 @@ struct Opts {
     positionals: Vec<String>,
     values: HashMap<String, String>,
     media: Vec<String>,
+    support: Vec<String>,
     flags: HashSet<String>,
 }
 
@@ -103,10 +108,12 @@ fn parse_opts(args: &[String]) -> Opts {
                     .get(i)
                     .cloned()
                     .unwrap_or_else(|| die(format!("{a} needs a value")));
-                if a == "--media" {
-                    o.media.push(val);
-                } else {
-                    o.values.insert(a.clone(), val);
+                match a.as_str() {
+                    "--media" => o.media.push(val),
+                    "--support" => o.support.push(val),
+                    _ => {
+                        o.values.insert(a.clone(), val);
+                    }
                 }
             }
         } else {
@@ -223,7 +230,71 @@ fn cmd_init(args: &[String]) {
     }
     if !dry {
         println!("the door is the .comms/ dir; edit policy.md and comms.toml to fit your community.");
+        println!("what's drivable today is in .comms/harness.md.");
+        if profile.name == "default" {
+            println!(
+                "tip: other profiles available with --profile ({}).",
+                profile_names().join(", ")
+            );
+        }
     }
+}
+
+// ---- attest ----------------------------------------------------------------
+
+fn cmd_attest(args: &[String]) {
+    let o = parse_opts(args);
+    let sk = load_key(o.require("--key"));
+    let about = o.require("--about");
+    let kind = o.get("--kind").unwrap_or("testimony");
+    let role = o.get("--role").unwrap_or("author");
+    let media_type = o.get("--media-type").unwrap_or("text/plain;charset=utf-8");
+    let language = o.get("--language").unwrap_or("zxx");
+
+    let body_path = o.require("--body");
+    let body = if body_path == "-" {
+        read_stdin()
+    } else {
+        read_file(body_path)
+    };
+
+    let now = now_rfc3339();
+    let issued_at = o.get("--issued-at").unwrap_or(now.as_str());
+    let signed_at = o.get("--signed-at").unwrap_or(now.as_str());
+
+    let spec = ClaimSpec {
+        about,
+        kind,
+        body: &body,
+        media_type,
+        support: &o.support,
+        language,
+        community: o.get("--community"),
+        occasion: o.get("--occasion"),
+        issued_at,
+    };
+    let att = author_general_claim(&spec, &sk, role, signed_at);
+    let id = att.id();
+    let out = o
+        .get("--out")
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{id}.cbor"));
+
+    write_out(&out, &att.to_cbor());
+    println!("attested {id}");
+    println!("  kind: {kind}   about: {about}   ({} body bytes, {media_type})", body.len());
+    println!(
+        "  signed by {} as '{role}' -> {out}",
+        personal_steward_id(sk.verifying_key().as_bytes())
+    );
+}
+
+fn read_stdin() -> Vec<u8> {
+    let mut buf = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut buf)
+        .unwrap_or_else(|e| die(format!("reading stdin: {e}")));
+    buf
 }
 
 // ---- verify ----------------------------------------------------------------
@@ -402,13 +473,16 @@ fn cmd_seal(args: &[String]) {
 fn cmd_pack(args: &[String]) {
     let o = parse_opts(args);
     let out = o.require("--out");
-    if o.positionals.is_empty() {
-        die("pack needs at least one attestation file or directory");
-    }
 
     let mut members = Vec::new();
     for p in &o.positionals {
-        for file in expand_cbor_paths(p) {
+        let files = expand_cbor_paths(p);
+        if files.is_empty() {
+            // A directory of non-.cbor content (the common surprise) is not an
+            // error, but packing it silently as zero members hides the mistake.
+            eprintln!("warning: {p} contributed no .cbor attestations (skipped)");
+        }
+        for file in files {
             let att = parse_attestation(&read_file(&file))
                 .unwrap_or_else(|e| die(format!("{file}: {e}")));
             members.push(att);
@@ -419,6 +493,13 @@ fn cmd_pack(args: &[String]) {
     for f in &o.media {
         let blob = read_file(f);
         media.insert(media_key(&blob), blob);
+    }
+
+    // A media-only bundle is legitimate; an entirely empty one is the mistake.
+    // (`attest` is the path to author the .cbor members a bundle carries.)
+    if members.is_empty() && media.is_empty() {
+        die("pack produced an empty bundle: give at least one .cbor attestation \
+             (see `attest`) or a --media file");
     }
 
     let (created_at, issued_at, signed_at) = timestamps(&o);

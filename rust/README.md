@@ -132,6 +132,15 @@ machine-readable "current state + next action." A small dependency-free reader
 handles the `comms.toml` subset (dotted tables, strings, bools, string arrays)
 so the binary stays a single static file.
 
+`mint` writes the secret seed to `.comms/<session>.key` (which `init`'s
+`.gitignore` keeps out of commits) and a public `.comms/<session>.id` marker
+that outlives `shred`. `attest` outputs are scoped by that session id
+(`store/<target>.<tag>.cbor`), so successive sessions accumulate rather than
+overwrite each other's artifacts.
+
+Every command also accepts `--help` for a synopsis, and `comms-verify --version`
+prints the version.
+
 ### verify vs inspect
 
 `verify` checks the **A1.8 seal**: the seal's own signature, the bundle hash,

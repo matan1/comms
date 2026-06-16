@@ -29,8 +29,18 @@ fn main() {
             usage();
             process::exit(1);
         }
-        Some("-h") | Some("--help") => {
-            usage();
+        Some("-h") | Some("--help") | Some("help") => {
+            print!("{}", usage_text());
+            process::exit(0);
+        }
+        Some("-V") | Some("--version") | Some("version") => {
+            println!("comms-verify {}", env!("CARGO_PKG_VERSION"));
+            process::exit(0);
+        }
+        // `<command> --help` / `-h` prints that command's synopsis (and exits 0)
+        // instead of being mistaken for a value-bearing option.
+        Some(name) if argv[1..].iter().any(|a| a == "-h" || a == "--help") => {
+            print!("{}", help_for(name));
             process::exit(0);
         }
         Some("init") => cmd_init(&argv[1..]),
@@ -50,27 +60,55 @@ fn main() {
 }
 
 fn usage() {
-    eprintln!("usage: comms-verify <command> [args]");
-    eprintln!();
-    eprintln!("The portable sneakernet kit for Comms Attest 1.0 bundles.");
-    eprintln!();
-    eprintln!("commands:");
-    eprintln!("  init    [dir] [--profile P] [--dry-run] [--force]  install the .comms/ door");
-    eprintln!("  attest  --key <k> --about S --kind S --body <file|-> [--media-type T]");
-    eprintln!("          [--language L] [--community C] [--occasion O] [--role R]");
-    eprintln!("          [--support ID]... [--out FILE]   author + sign a general-claim/1");
-    eprintln!("  status  [dir] [--json]           where you are in the rite + next step");
-    eprintln!("  next    [dir] [--rite N] [--body F] [--about S]   perform the next step");
-    eprintln!("  verify  <bundle>                 check the A1.8 integrity seal (default)");
-    eprintln!("  inspect <bundle> [--json]        verify every member on its own terms");
-    eprintln!("  seal    <bundle> --key <k> [--out <p>] [--description S] [--*-at T]");
-    eprintln!("  pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]");
-    eprintln!("  extract <bundle> --out <dir>     write members and media to files");
-    eprintln!("  mint    --out <key.json> [--label L]   generate a steward key for sealing");
-    eprintln!("  vouch   <bundle> --policy ID --subject ID --purpose S --as-of T [--json]");
-    eprintln!("          [--community ID] [--receipt-out P --key K]");
-    eprintln!();
-    eprintln!("A 'valid' result is layer 2/3 (verified + resolvable). Trust is yours.");
+    eprint!("{}", usage_text());
+}
+
+fn usage_text() -> String {
+    format!(
+        "comms-verify {} — the portable sneakernet kit for Comms Attest 1.0.\n\
+         \n\
+         usage: comms-verify <command> [args]   (try `comms-verify <command> --help`)\n\
+         \n\
+         commands:\n\
+         \x20 init    [dir] [--profile P] [--dry-run] [--force]  install the .comms/ door\n\
+         \x20 attest  --key <k> --about S --kind S --body <file|-> [--media-type T]\n\
+         \x20         [--language L] [--community C] [--occasion O] [--role R]\n\
+         \x20         [--support ID]... [--out FILE]   author + sign a general-claim/1\n\
+         \x20 status  [dir] [--json]           where you are in the rite + next step\n\
+         \x20 next    [dir] [--rite N] [--body F] [--about S]   perform the next step\n\
+         \x20 verify  <bundle>                 check the A1.8 integrity seal (default)\n\
+         \x20 inspect <bundle> [--json]        verify every member on its own terms\n\
+         \x20 seal    <bundle> --key <k> [--out <p>] [--description S] [--*-at T]\n\
+         \x20 pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]\n\
+         \x20 extract <bundle> --out <dir>     write members and media to files\n\
+         \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
+         \x20 vouch   <bundle> --policy ID --subject ID --purpose S --as-of T [--json]\n\
+         \x20         [--community ID] [--receipt-out P --key K]\n\
+         \n\
+         A 'valid' result is layer 2/3 (verified + resolvable). Trust is yours.\n\
+         Run with -V/--version for the version.\n",
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+/// Per-command synopsis for `<command> --help`. Unknown names fall back to the
+/// general usage (this includes the bare-bundle-path back-compat form).
+fn help_for(cmd: &str) -> String {
+    let synopsis = match cmd {
+        "init" => "comms-verify init [dir] [--profile default|continuity] [--dry-run] [--force]\n  Install or refresh the .comms/ harness door in a repo.\n",
+        "attest" => "comms-verify attest --key <k.json> --about S --kind S --body <file|-> \\\n    [--media-type T] [--language L] [--community C] [--occasion O] [--role R] \\\n    [--support ID]... [--out FILE]\n  Author and sign a general-claim/1 from a content file (-> <id>.cbor).\n",
+        "status" => "comms-verify status [dir] [--json]\n  Report where you are in each rite and the exact next command.\n",
+        "next" => "comms-verify next [dir] [--rite N] [--body F] [--about S] [--kind K]\n  Perform the next pending step of a rite. attest steps need --body;\n  with no --rite, advances the rite you are currently in.\n",
+        "verify" => "comms-verify verify <bundle>\n  Check the A1.8 integrity seal (also the default for a bare bundle path).\n",
+        "inspect" => "comms-verify inspect <bundle> [--json]\n  Verify every member on its own terms (signatures, refs, media).\n",
+        "seal" => "comms-verify seal <bundle> --key <k.json> [--out P] [--description S] [--created-at T] [--issued-at T] [--signed-at T]\n  Add an A1.8 integrity seal (signs the exact member set).\n",
+        "pack" => "comms-verify pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
+        "extract" => "comms-verify extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
+        "mint" => "comms-verify mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
+        "vouch" => "comms-verify vouch <bundle> --policy ID --subject ID --purpose S --as-of T [--json] [--community ID] [--receipt-out P --key K]\n  Policy-relative evaluation: a viewer's judgment, not proof.\n",
+        _ => return usage_text(),
+    };
+    synopsis.to_owned()
 }
 
 // ---- shared helpers --------------------------------------------------------
@@ -100,7 +138,7 @@ struct Opts {
 }
 
 fn parse_opts(args: &[String]) -> Opts {
-    const BOOLS: &[&str] = &["--seal", "--json", "--dry-run", "--force"];
+    const BOOLS: &[&str] = &["--seal", "--json", "--dry-run", "--force", "-h", "--help"];
     let mut o = Opts::default();
     let mut i = 0;
     while i < args.len() {

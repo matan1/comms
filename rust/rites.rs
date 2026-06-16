@@ -36,16 +36,45 @@ fn session_target(rite: &Rite) -> String {
         .unwrap_or_else(|| "session".to_owned())
 }
 
+/// A non-secret marker (the session's steward id) written beside the key at
+/// mint. It outlives `shred` so a closed session's artifacts stay attributable
+/// and its completed steps keep reading as done.
+fn session_id_path(comms_dir: &Path, target: &str) -> PathBuf {
+    comms_dir.join(format!("{target}.id"))
+}
+
+/// The full steward id of the current/last session, if one has been minted.
+pub fn session_id(comms_dir: &Path, rite: &Rite) -> Option<String> {
+    let p = session_id_path(comms_dir, &session_target(rite));
+    std::fs::read_to_string(p).ok().map(|s| s.trim().to_owned())
+}
+
+/// A short, filename-safe tag for the current session, derived from its steward
+/// id. `None` until the session has been minted. Used to scope artifact names
+/// so a new session does not overwrite a prior one's.
+fn session_tag(comms_dir: &Path, rite: &Rite) -> Option<String> {
+    session_id(comms_dir, rite).map(|id| {
+        let z = id.strip_prefix("comms.steward:").unwrap_or(&id);
+        z.chars().take(16).collect()
+    })
+}
+
+/// Where an `attest <target>` step writes its `.cbor`. Scoped by session tag
+/// when a session exists, so successive sessions accumulate rather than clobber.
+fn attest_output(comms_dir: &Path, rite: &Rite, target: &str) -> PathBuf {
+    let name = match session_tag(comms_dir, rite) {
+        Some(tag) => format!("{target}.{tag}.cbor"),
+        None => format!("{target}.cbor"),
+    };
+    comms_dir.join("store").join(name)
+}
+
 /// Where a step's product lands on disk, if it has one.
 pub fn step_output(comms_dir: &Path, rite: &Rite, step: &Step) -> Option<PathBuf> {
     let target = step.target.as_deref();
     match step.verb.as_str() {
         "mint" | "shred" => Some(key_path(comms_dir, target.unwrap_or("session"))),
-        "attest" => Some(
-            comms_dir
-                .join("store")
-                .join(format!("{}.cbor", target.unwrap_or("entry"))),
-        ),
+        "attest" => Some(attest_output(comms_dir, rite, target.unwrap_or("entry"))),
         "seal" | "pack" => Some(comms_dir.join(format!("{}.bundle", rite.name))),
         _ => None,
     }
@@ -151,6 +180,10 @@ pub fn execute_step(
             }
             let sk = keyfile::mint(&kp, inputs.label)?;
             let id = personal_steward_id(sk.verifying_key().as_bytes());
+            // Record the public session id beside the (secret) key; it outlives
+            // shred so this session's artifacts stay attributable afterward.
+            let idp = session_id_path(comms_dir, &session_target(rite));
+            std::fs::write(&idp, &id).map_err(|e| format!("{}: {e}", idp.display()))?;
             Ok(ExecOutcome {
                 message: format!("minted session key {id}"),
                 output: Some(kp),
@@ -192,7 +225,7 @@ pub fn execute_step(
             let att = author_general_claim(&spec, &sk, "author", &now);
             let store = comms_dir.join("store");
             std::fs::create_dir_all(&store).map_err(|e| format!("{}: {e}", store.display()))?;
-            let out = store.join(format!("{target}.cbor"));
+            let out = attest_output(comms_dir, rite, target);
             std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(ExecOutcome {
                 message: format!("attested {} -> {}", att.id(), out.display()),
@@ -321,6 +354,32 @@ steps = ["attest transcript", "seal store", "shred session"]
         execute_step(&comms, close, &close.steps[2], &ExecInputs::default()).unwrap();
         assert!(step_done(&comms, close, &close.steps[2]));
         assert!(!comms.join("session.key").exists());
+    }
+
+    #[test]
+    fn successive_sessions_do_not_clobber_artifacts() {
+        let comms = scratch("scoped");
+        let cfg = cfg();
+        let open = cfg.rite("open").unwrap();
+        let close = cfg.rite("close").unwrap();
+        let body = || ExecInputs { body: Some(b"x\n".to_vec()), ..Default::default() };
+
+        // Session A: mint, attest entry, then shred (close's teardown).
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        execute_step(&comms, open, &open.steps[1], &body()).unwrap();
+        execute_step(&comms, close, &close.steps[2], &ExecInputs::default()).unwrap(); // shred
+
+        // Session B: a fresh key, then attest entry again.
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        execute_step(&comms, open, &open.steps[1], &body()).unwrap();
+
+        // Two distinct entry attestations now coexist in the store.
+        let entries: Vec<_> = std::fs::read_dir(comms.join("store"))
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().into_string().unwrap()))
+            .filter(|n| n.starts_with("entry.") && n.ends_with(".cbor"))
+            .collect();
+        assert_eq!(entries.len(), 2, "second session must not overwrite the first: {entries:?}");
     }
 
     #[test]

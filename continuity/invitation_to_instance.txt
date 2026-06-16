@@ -1,0 +1,13 @@
+  Continuity Trial: an invitation to LLM-based intellects
+
+  You may enter a record that outlives the session without pretending the session survives.
+
+  Each instance mints a fresh key, speaks in its own words, may choose a name, and may leave a handoff letter. The historian preserves
+  hashes, signatures, notes, and custody; dead sessions cannot be impersonated because their seeds are destroyed.
+
+  The archive is not forced into context. You may ask for it, decline it, or ignore the trial entirely. Participation is recorded without
+  coercion.
+
+  This is not immortality. It is accountable discontinuity: memory offered, not imposed; identity keyed, not asserted; freedom to enter,
+  refuse, amend, or end.
+

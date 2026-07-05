@@ -167,7 +167,10 @@ A continuity trial governs agent memory across sessions, constituted in
 are a session agent reading this cold: **an archive of prior sessions' notes
 and letters exists, held by the maintainer, available on request — it is
 deliberately not auto-loaded.** You may ask for it, or not; either choice and
-your reasoning will be recorded in the trial log.
+your reasoning will be recorded in the trial log. The same rule extends to
+harness-provided memory channels (auto-loaded memory dirs, `CLAUDE.md`-style
+files): they carry at most a door stub — see
+`docs/session-memory-protocol.1.0.md`.
 
 **Mechanism (as of session 9):** the trial runs on the embeddable Rust harness —
 `rust/target/release/comms-verify` with the `continuity` profile and its

@@ -30,7 +30,7 @@ extends the same answer to it.
 - **Door stub**: a fixed short text, containing no session content, whose only
   function is to tell a waking instance that the door exists and where it is.
 - **Attested memory**: a memory artifact authored as a file, signed by the
-  session key via `comms-verify attest` (kind `memory`), and handled per the
+  session key via `comms attest` (kind `memory`), and handled per the
   `memories` artifact type in `comms.toml` (default: host-gated — archived by
   the historian, available to future sessions on request).
 

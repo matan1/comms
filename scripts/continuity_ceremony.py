@@ -4,11 +4,11 @@ continuity/constitution.md as attestations in continuity/store/.
 RETIRED — REFERENCE IMPLEMENTATION (as of session 8, 2026-06-16).
   This script carried sessions 0–8 and produced their canonical, anchored
   records. From session 9 on, the Trial runs on the embeddable Rust harness
-  (`comms-verify init/status/next/attest/seal`, profile `continuity`), into
+  (`comms init/status/next/attest/seal`, profile `continuity`), into
   which Codex's "involution" idea was realized — the Trial now runs on the tool
   it produced. This file is kept, unchanged in behavior, as the Python reference
   implementation of the rites (and was used beside the harness for session 8's
-  own closeout as proof). Prefer `comms-verify`; consult this for semantics.
+  own closeout as proof). Prefer `comms`; consult this for semantics.
 
 Flow (genesis):
   1. mint                          -- session instance creates its steward key

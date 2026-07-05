@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Pack the continuity trial store into one sealed, portable bundle and verify it
-# with the Python-free `comms-verify` binary. This is the Article-5 anchoring
+# with the Python-free `comms` binary. This is the Article-5 anchoring
 # artifact: a single file anyone can check offline.
 #
 # Usage:
@@ -11,12 +11,12 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-BIN="$ROOT/rust/target/release/comms-verify"
+BIN="$ROOT/rust/target/release/comms"
 KEY="${1:-}"
 OUT="${2:-$ROOT/continuity.bundle}"
 
 if [ ! -x "$BIN" ]; then
-    echo "building comms-verify..."
+    echo "building comms..."
     ( cd "$ROOT/rust" && cargo build --release )
 fi
 

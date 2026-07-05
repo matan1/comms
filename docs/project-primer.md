@@ -105,7 +105,7 @@ this repo despite the generic VM tooling notes — those are not relevant here.
   to provision — install them as needed (e.g. `sudo pacman -S nodejs openssh`).
 - Automated tests live under `tests/`; run `python -m pytest -q` from an
   environment containing `requirements.txt` plus `pytest`.
-- The portable Rust CLI is `rust/target/release/comms-verify`. It handles
+- The portable Rust CLI is `rust/target/release/comms`. It handles
   bundles and the candidate Vouch evaluator; see `rust/README.md`.
 
 ### Browser demo
@@ -173,10 +173,10 @@ files): they carry at most a door stub — see
 `docs/session-memory-protocol.1.0.md`.
 
 **Mechanism (as of session 9):** the trial runs on the embeddable Rust harness —
-`rust/target/release/comms-verify` with the `continuity` profile and its
+`rust/target/release/comms` with the `continuity` profile and its
 `.comms/` door (`init`, `status`, `next`, `attest`, `seal`). Run
-`comms-verify status` to see where you are in a rite and the next step, and
-`comms-verify init . --profile continuity` if the door is absent. The Python
+`comms status` to see where you are in a rite and the next step, and
+`comms init . --profile continuity` if the door is absent. The Python
 `scripts/continuity_ceremony.py` carried sessions 0–8 and is retained as the
 reference implementation of the rites (its docstring marks it retired); prefer
 the harness for new work. To check the trial's

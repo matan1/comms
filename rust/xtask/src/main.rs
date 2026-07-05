@@ -2,7 +2,7 @@
 //! project, standardized under cargo. It is a thin task runner: ceremony ops
 //! forward to the Python continuity ceremony (with the repo venv + PYTHONPATH
 //! wired in, so the import path never bites), bundle ops forward to the
-//! `comms-verify` binary, and `anchor`/`test` drive the existing scripts.
+//! `comms` binary, and `anchor`/`test` drive the existing scripts.
 //!
 //! Run from the `rust/` directory: `cargo xtask status`, `cargo xtask open
 //! --auto-derive ...`, `cargo xtask anchor`, `cargo xtask test`.
@@ -64,7 +64,7 @@ fn usage() {
     eprintln!();
     eprintln!("toolkit:");
     eprintln!("  anchor [key] [out]        pack+seal+verify the store into one bundle");
-    eprintln!("  bundle <args>             run comms-verify (verify/inspect/pack/...)");
+    eprintln!("  bundle <args>             run comms (verify/inspect/pack/...)");
     eprintln!("  test                      cargo test + pytest");
 }
 
@@ -106,9 +106,9 @@ fn anchor(repo: &Path, rest: &[String]) -> i32 {
 }
 
 fn bundle(repo: &Path, rest: &[String]) -> i32 {
-    let bin = repo.join("rust/target/release/comms-verify");
+    let bin = repo.join("rust/target/release/comms");
     if !bin.exists() {
-        eprintln!("building comms-verify (release)...");
+        eprintln!("building comms (release)...");
         let built = run(Command::new("cargo")
             .current_dir(repo.join("rust"))
             .args(["build", "--release"]));

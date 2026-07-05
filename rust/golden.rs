@@ -581,7 +581,7 @@ fn bundle_smuggled_member_fails() {
 }
 
 /// The create-side path (`author_general_claim`, the engine behind
-/// `comms-verify attest`) must reproduce the published general-claim vector
+/// `comms attest`) must reproduce the published general-claim vector
 /// byte-for-byte: same canonical core, same id, same deterministic author
 /// signature. This pins authoring to the Python reference the same way the
 /// seal golden pins `build_seal`.

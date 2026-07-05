@@ -1,12 +1,12 @@
 # The Comms harness — what's here and what's drivable
 
-This `.comms/` door was installed by `comms-verify init`. It is the boundary; the
-`comms-verify` binary is the tool. This file is honest about the gap between the
+This `.comms/` door was installed by `comms init`. It is the boundary; the
+`comms` binary is the tool. This file is honest about the gap between the
 two so you are not surprised.
 
 ## What the binary can do today
 
-`comms-verify` is a self-contained kit for authoring and moving signed,
+`comms` is a self-contained kit for authoring and moving signed,
 content-addressed attestations offline:
 
 - `status`  — read this door and report **where you are in the rite and the next
@@ -23,36 +23,47 @@ content-addressed attestations offline:
 - `verify`  — check a bundle's seal.
 - `inspect` — verify every member on its own terms (signatures, refs, media).
 - `extract` — write a bundle's members and media back out to files.
+- `sign`    — countersign staged pending items with an OpenSSH ed25519 key or a
+              steward key. The counterparty's half of a rite: run it wherever
+              their key lives; needs naming other keys are left standing.
+- `finalize`— verify fully-signed pending items and move them into the store
+              under their content id. Aborts loudly on anything unsigned.
 - `vouch`   — a candidate policy-relative evaluator (judgment, not proof).
 
 ## Rites are config-driven
 
 `comms.toml` declares each rite as an ordered list of `"verb target"` steps —
-the verb is one the tool performs (`mint`, `attest`, `seal`, `shred`), the target
-is what it acts on (an artifact type, or a built-in noun like `session` or
-`store`). The tool knows how to perform each verb and how to detect whether it
-has been done; the config sequences them. So a profile defines its own flow
-without new code.
+the verb is one the tool performs (`mint`, `attest`, `seal`, `shred`,
+`countersign`, `request`, `grant`), the target is what it acts on (an artifact
+type, or a built-in noun like `session` or `store`). The tool knows how to
+perform each verb and how to detect whether it has been done; the config
+sequences them. So a profile defines its own flow without new code.
 
 ```sh
-comms-verify status                         # where am I? what's next?
-comms-verify next --rite open               # mint the session key
-comms-verify next --rite open --body entry.md   # attest the opening entry
+comms status                         # where am I? what's next?
+comms next --rite open               # mint the session key
+comms next --rite open --body entry.md   # attest the opening entry
+comms next --rite open               # stage the key countersign (with [countersign])
+#   ...the counterparty: comms sign --key ~/.ssh/id_ed25519 && comms finalize
 # ... work ...
-comms-verify next --rite close --body transcript.md   # attest the transcript
-comms-verify next --rite close              # seal the store into a bundle
-comms-verify next --rite close              # shred the session key (seed gone)
+comms next --rite archive --body ask.md      # record an archive request
+comms next --rite archive --key <their key> [--decision grant|decline|defer]
+comms next --rite close --body transcript.md   # attest the transcript
+comms next --rite close              # seal the store into a bundle
+comms next --rite close              # shred the session key (seed gone)
 ```
 
-Steps that author content (`attest`) take `--body <file>`; the rest run on their
-own. `status` always shows the exact next command. `--rite` is optional — with no
-flag, `next` advances the rite you're currently in.
+Steps that author content (`attest`, `request`) take `--body <file>`; `grant`
+takes the counterparty's `--key` (a decline or deferral is a first-class
+record, not a failure); the rest run on their own. `status` always shows the
+exact next command and any staged item still awaiting a signature. `--rite` is
+optional — with no flag, `next` advances the rite you're currently in.
 
 ## Still by hand (for now)
 
-`archive`/`request` are not yet rite verbs: archive access (and its grants,
-deferrals, and denials) is still recorded out of band. Declared `required_for`
-artifacts are not yet enforced at `seal`/close. Those are the next increments.
+Declared `required_for` artifacts are not yet enforced at `seal`/close, and the
+session key still touches disk between `mint` and `shred` (an in-memory
+ephemeral key is the honest fix). Those are the next increments.
 
 ## The stance
 

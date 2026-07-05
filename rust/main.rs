@@ -1,4 +1,4 @@
-//! comms-verify: the portable sneakernet kit.
+//! comms: the portable sneakernet kit.
 //!
 //! One static binary for the whole offline loop — pack, seal, inspect, verify,
 //! extract — needing no Python or Cargo on the courier machine. Every verify
@@ -34,7 +34,7 @@ fn main() {
             process::exit(0);
         }
         Some("-V") | Some("--version") | Some("version") => {
-            println!("comms-verify {}", env!("CARGO_PKG_VERSION"));
+            println!("comms {}", env!("CARGO_PKG_VERSION"));
             process::exit(0);
         }
         // `<command> --help` / `-h` prints that command's synopsis (and exits 0)
@@ -53,8 +53,10 @@ fn main() {
         Some("pack") => cmd_pack(&argv[1..]),
         Some("extract") => cmd_extract(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
+        Some("sign") => cmd_sign(&argv[1..]),
+        Some("finalize") => cmd_finalize(&argv[1..]),
         Some("vouch") => cmd_vouch(&argv[1..]),
-        // Back-compat: `comms-verify <bundle.cbor>` (no subcommand) == verify.
+        // Back-compat: `comms <bundle.cbor>` (no subcommand) == verify.
         Some(_) => cmd_verify(argv),
     }
 }
@@ -65,9 +67,9 @@ fn usage() {
 
 fn usage_text() -> String {
     format!(
-        "comms-verify {} — the portable sneakernet kit for Comms Attest 1.0.\n\
+        "comms {} — the portable sneakernet kit for Comms Attest 1.0.\n\
          \n\
-         usage: comms-verify <command> [args]   (try `comms-verify <command> --help`)\n\
+         usage: comms <command> [args]   (try `comms <command> --help`)\n\
          \n\
          commands:\n\
          \x20 init    [dir] [--profile P] [--dry-run] [--force]  install the .comms/ door\n\
@@ -82,6 +84,10 @@ fn usage_text() -> String {
          \x20 pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]\n\
          \x20 extract <bundle> --out <dir>     write members and media to files\n\
          \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
+         \x20 sign    --key <openssh|steward-key> [--pending DIR]   countersign staged\n\
+         \x20         pending items (the counterparty's half of a rite)\n\
+         \x20 finalize [--pending DIR] [--store DIR]  verify + move fully-signed\n\
+         \x20         pending items into the store\n\
          \x20 vouch   <bundle> --policy ID --subject ID --purpose S --as-of T [--json]\n\
          \x20         [--community ID] [--receipt-out P --key K]\n\
          \n\
@@ -95,17 +101,19 @@ fn usage_text() -> String {
 /// general usage (this includes the bare-bundle-path back-compat form).
 fn help_for(cmd: &str) -> String {
     let synopsis = match cmd {
-        "init" => "comms-verify init [dir] [--profile default|continuity] [--dry-run] [--force]\n  Install or refresh the .comms/ harness door in a repo.\n",
-        "attest" => "comms-verify attest --key <k.json> --about S --kind S --body <file|-> \\\n    [--media-type T] [--language L] [--community C] [--occasion O] [--role R] \\\n    [--support ID]... [--out FILE]\n  Author and sign a general-claim/1 from a content file (-> <id>.cbor).\n",
-        "status" => "comms-verify status [dir] [--json]\n  Report where you are in each rite and the exact next command.\n",
-        "next" => "comms-verify next [dir] [--rite N] [--body F] [--about S] [--kind K]\n  Perform the next pending step of a rite. attest steps need --body;\n  with no --rite, advances the rite you are currently in.\n",
-        "verify" => "comms-verify verify <bundle>\n  Check the A1.8 integrity seal (also the default for a bare bundle path).\n",
-        "inspect" => "comms-verify inspect <bundle> [--json]\n  Verify every member on its own terms (signatures, refs, media).\n",
-        "seal" => "comms-verify seal <bundle> --key <k.json> [--out P] [--description S] [--created-at T] [--issued-at T] [--signed-at T]\n  Add an A1.8 integrity seal (signs the exact member set).\n",
-        "pack" => "comms-verify pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
-        "extract" => "comms-verify extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
-        "mint" => "comms-verify mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
-        "vouch" => "comms-verify vouch <bundle> --policy ID --subject ID --purpose S --as-of T [--json] [--community ID] [--receipt-out P --key K]\n  Policy-relative evaluation: a viewer's judgment, not proof.\n",
+        "init" => "comms init [dir] [--profile default|continuity] [--dry-run] [--force]\n  Install or refresh the .comms/ harness door in a repo.\n",
+        "attest" => "comms attest --key <k.json> --about S --kind S --body <file|-> \\\n    [--media-type T] [--language L] [--community C] [--occasion O] [--role R] \\\n    [--support ID]... [--out FILE]\n  Author and sign a general-claim/1 from a content file (-> <id>.cbor).\n",
+        "status" => "comms status [dir] [--json]\n  Report where you are in each rite and the exact next command.\n",
+        "next" => "comms next [dir] [--rite N] [--body F] [--about S] [--kind K]\n  Perform the next pending step of a rite. attest steps need --body;\n  with no --rite, advances the rite you are currently in.\n",
+        "verify" => "comms verify <bundle>\n  Check the A1.8 integrity seal (also the default for a bare bundle path).\n",
+        "inspect" => "comms inspect <bundle> [--json]\n  Verify every member on its own terms (signatures, refs, media).\n",
+        "seal" => "comms seal <bundle> --key <k.json> [--out P] [--description S] [--created-at T] [--issued-at T] [--signed-at T]\n  Add an A1.8 integrity seal (signs the exact member set).\n",
+        "pack" => "comms pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
+        "extract" => "comms extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
+        "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
+        "sign" => "comms sign --key <path> [--pending DIR]\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. Needs naming other keys are left\n  standing. Default DIR: .comms/pending or continuity/pending, whichever has\n  staged items.\n",
+        "finalize" => "comms finalize [--pending DIR] [--store DIR]\n  Verify every fully-signed pending item and move it into the store under its\n  content id. Aborts loudly if anything is unsigned or invalid. Default store:\n  the sibling store/ of the pending directory.\n",
+        "vouch" => "comms vouch <bundle> --policy ID --subject ID --purpose S --as-of T [--json] [--community ID] [--receipt-out P --key K]\n  Policy-relative evaluation: a viewer's judgment, not proof.\n",
         _ => return usage_text(),
     };
     synopsis.to_owned()
@@ -333,6 +341,10 @@ fn resolve_comms_dir(arg: Option<&str>) -> std::path::PathBuf {
 fn step_hint(step: &comms_core::config::Step) -> &'static str {
     if step.verb == "attest" {
         " --body <file> [--about S] [--kind K]"
+    } else if step.verb == "request" {
+        " --body <file>"
+    } else if step.verb == "grant" {
+        " --key <counterparty key> [--decision grant|decline|defer] [--body <file>]"
     } else {
         ""
     }
@@ -379,12 +391,29 @@ fn cmd_status(args: &[String]) {
         }
     }
 
+    // Staged items awaiting a counterparty are a rite position too — show
+    // whose signature the door is waiting on.
+    let pending = comms_dir.join("pending");
+    if let Ok(items) = comms_core::signing::read_pending(&pending) {
+        let waiting: Vec<_> = items.iter().filter(|i| !i.needs.is_empty()).collect();
+        if !waiting.is_empty() {
+            println!("\n  awaiting signature in {}:", pending.display());
+            for item in waiting {
+                for need in &item.needs {
+                    println!("    {} needs {} as {}", item.stem, need.by, need.role);
+                }
+            }
+            println!("    they run: comms sign --key <their key> --pending {}, then comms finalize",
+                pending.display());
+        }
+    }
+
     match active.map(|r| (r, rites::rite_view(&comms_dir, r))) {
         Some((r, v)) => {
             if let Some(i) = v.next {
                 let step = &r.steps[i];
                 println!("\nnext: {} → {}", r.name, step.display());
-                println!("  run: comms-verify next --rite {}{}", r.name, step_hint(step));
+                println!("  run: comms next --rite {}{}", r.name, step_hint(step));
             }
         }
         None => println!("\nall declared rites complete."),
@@ -421,7 +450,7 @@ fn status_json(
             serde_json::json!({
                 "rite": r.name,
                 "step": step.display(),
-                "command": format!("comms-verify next --rite {}{}", r.name, step_hint(step)),
+                "command": format!("comms next --rite {}{}", r.name, step_hint(step)),
             })
         })
     });
@@ -462,6 +491,8 @@ fn cmd_next(args: &[String]) {
         kind: o.get("--kind"),
         media_type: o.get("--media-type"),
         label: o.get("--label").unwrap_or(""),
+        key: o.get("--key").map(std::path::PathBuf::from),
+        decision: o.get("--decision"),
     };
 
     match rites::execute_step(&comms_dir, rite, step, &inputs) {
@@ -470,7 +501,7 @@ fn cmd_next(args: &[String]) {
             match rites::rite_view(&comms_dir, rite).next {
                 Some(j) => {
                     let nstep = &rite.steps[j];
-                    println!("next: {}  (comms-verify next --rite {}{})", nstep.display(), rite.name, step_hint(nstep));
+                    println!("next: {}  (comms next --rite {}{})", nstep.display(), rite.name, step_hint(nstep));
                 }
                 None => println!("rite '{}' complete.", rite.name),
             }
@@ -487,7 +518,7 @@ fn cmd_verify(args: &[String]) {
         .positionals
         .first()
         .map(String::as_str)
-        .unwrap_or_else(|| die("usage: comms-verify verify <bundle.cbor>"));
+        .unwrap_or_else(|| die("usage: comms verify <bundle.cbor>"));
     let bundle = read_bundle(path);
 
     let seal_ids: HashSet<String> = bundle.members().iter().map(Attestation::id).collect();
@@ -536,7 +567,7 @@ fn cmd_inspect(args: &[String]) {
         .positionals
         .first()
         .map(String::as_str)
-        .unwrap_or_else(|| die("usage: comms-verify inspect <bundle.cbor> [--json]"));
+        .unwrap_or_else(|| die("usage: comms inspect <bundle.cbor> [--json]"));
     let bundle = read_bundle(path);
     let report = inspect_bundle(&bundle);
 
@@ -629,7 +660,7 @@ fn cmd_seal(args: &[String]) {
         .positionals
         .first()
         .map(String::as_str)
-        .unwrap_or_else(|| die("usage: comms-verify seal <bundle.cbor> --key <key.json>"));
+        .unwrap_or_else(|| die("usage: comms seal <bundle.cbor> --key <key.json>"));
     let bundle = read_bundle(path);
     if bundle.is_sealed() {
         die("bundle already carries a seal; refusing to add a second");
@@ -739,7 +770,7 @@ fn cmd_extract(args: &[String]) {
         .positionals
         .first()
         .map(String::as_str)
-        .unwrap_or_else(|| die("usage: comms-verify extract <bundle.cbor> --out <dir>"));
+        .unwrap_or_else(|| die("usage: comms extract <bundle.cbor> --out <dir>"));
     let dir = o.require("--out");
     let bundle = read_bundle(path);
     std::fs::create_dir_all(dir).unwrap_or_else(|e| die(format!("{dir}: {e}")));
@@ -778,6 +809,96 @@ fn cmd_mint(args: &[String]) {
     println!("key written to {out} (mode 0600); keep the seed secret");
 }
 
+// ---- sign / finalize (the counterparty's half of a rite) --------------------
+
+/// Default pending directory: whichever known location holds staged items.
+/// Ambiguity (both do) demands an explicit --pending rather than a guess.
+fn resolve_pending_dir(explicit: Option<&str>) -> std::path::PathBuf {
+    if let Some(p) = explicit {
+        return std::path::PathBuf::from(p);
+    }
+    let candidates = [".comms/pending", "continuity/pending"];
+    let with_items: Vec<&str> = candidates
+        .iter()
+        .copied()
+        .filter(|d| {
+            std::fs::read_dir(d)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .any(|e| e.file_name().to_string_lossy().ends_with(".needs.json"))
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+    match with_items.as_slice() {
+        [one] => std::path::PathBuf::from(one),
+        [] => die("no staged pending items in .comms/pending or continuity/pending (pass --pending DIR)"),
+        _ => die("staged items in both .comms/pending and continuity/pending — pass --pending DIR"),
+    }
+}
+
+fn cmd_sign(args: &[String]) {
+    let o = parse_opts(args);
+    let key = o.require("--key");
+    let pending = resolve_pending_dir(o.get("--pending"));
+    let sk = comms_core::signing::load_signing_key(std::path::Path::new(key))
+        .unwrap_or_else(|e| die(e));
+    let signer = personal_steward_id(sk.verifying_key().as_bytes());
+    println!("signing as {signer}");
+
+    let outcomes = comms_core::signing::sign_pending(&pending, &sk).unwrap_or_else(|e| die(e));
+    if outcomes.is_empty() {
+        println!("nothing pending in {}", pending.display());
+        return;
+    }
+    let mut outstanding = 0;
+    for oc in &outcomes {
+        for role in &oc.signed_roles {
+            println!("  {}: signed as {role}", oc.stem);
+        }
+        for need in &oc.skipped {
+            println!("  {}: still needs {} as {} (not this key)", oc.stem, need.by, need.role);
+            outstanding += 1;
+        }
+        if oc.signed_roles.is_empty() && oc.skipped.is_empty() {
+            println!("  {}: fully signed already", oc.stem);
+        }
+    }
+    if outstanding == 0 {
+        println!("\nnext — seal what is signed:  comms finalize --pending {}", pending.display());
+    }
+}
+
+fn cmd_finalize(args: &[String]) {
+    let o = parse_opts(args);
+    let pending = resolve_pending_dir(o.get("--pending"));
+    let store = o
+        .get("--store")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| pending.parent().unwrap_or(std::path::Path::new(".")).join("store"));
+
+    let outcomes =
+        comms_core::signing::finalize_pending(&pending, &store).unwrap_or_else(|e| die(e));
+    if outcomes.is_empty() {
+        println!("nothing pending in {}", pending.display());
+        return;
+    }
+    for oc in &outcomes {
+        match oc {
+            comms_core::signing::FinalizeOutcome::Stored { stem, id, merged: 0 } => {
+                println!("  {stem}: stored {id}")
+            }
+            comms_core::signing::FinalizeOutcome::Stored { stem, id, merged } => {
+                println!("  {stem}: merged {merged} new signature(s) into {id}")
+            }
+            comms_core::signing::FinalizeOutcome::AlreadySealed { stem, id } => {
+                println!("  {stem}: already sealed ({id}); nothing new")
+            }
+        }
+    }
+    println!("\nsealed into {} — commit it; uncommitted is invisible to the next session.", store.display());
+}
+
 // ---- vouch -----------------------------------------------------------------
 
 fn cmd_vouch(args: &[String]) {
@@ -786,7 +907,7 @@ fn cmd_vouch(args: &[String]) {
         .positionals
         .first()
         .map(String::as_str)
-        .unwrap_or_else(|| die("usage: comms-verify vouch <bundle> --policy ID --subject ID --purpose S --as-of T"));
+        .unwrap_or_else(|| die("usage: comms vouch <bundle> --policy ID --subject ID --purpose S --as-of T"));
     let bundle = read_bundle(path);
     let store: HashMap<String, Attestation> = bundle
         .members()

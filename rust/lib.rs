@@ -12,6 +12,7 @@ pub mod config;
 pub mod init;
 pub mod keyfile;
 pub mod rites;
+pub mod signing;
 pub mod steward;
 pub mod vouch;
 

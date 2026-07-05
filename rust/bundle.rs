@@ -239,7 +239,7 @@ fn find_seals(bundle: &Bundle) -> Vec<(&Attestation, Value)> {
 
 /// Extract the 32-byte public key from a personal steward id
 /// `comms.steward:z<base58btc(key)>`.
-fn pubkey_from_steward_id(id: &str) -> Option<[u8; 32]> {
+pub fn pubkey_from_steward_id(id: &str) -> Option<[u8; 32]> {
     let encoded = id.strip_prefix("comms.steward:z")?;
     let bytes = bs58::decode(encoded).into_vec().ok()?;
     <[u8; 32]>::try_from(bytes.as_slice()).ok()

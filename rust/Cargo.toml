@@ -20,12 +20,14 @@ bs58 = "0.5"
 # Pure-Rust; used to read/write steward key files ({seed_b58,label}) and to
 # emit `inspect --json`. Keeps the binary statically linkable (no system libs).
 serde_json = "1"
+ssh-key = { version = "0.6.7", default-features = false, features = ["ed25519", "encryption"] }
+rpassword = "7.5.4"
 
 [dev-dependencies]
 hex = "0.4"
 
 [[bin]]
-name = "comms-verify"
+name = "comms"
 path = "main.rs"
 
 [[test]]

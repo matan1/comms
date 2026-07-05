@@ -211,6 +211,19 @@ pub struct Rite {
     pub allow_waivers: bool,
 }
 
+/// Who countersigns staged artifacts (the `[countersign]` table). The `by`
+/// steward id is the counterparty a `countersign` step names in its needs
+/// file; the substrate never signs on their behalf.
+#[derive(Debug, Clone)]
+pub struct CountersignCfg {
+    pub by: String,
+    pub role: String,
+    pub community: Option<String>,
+    /// Optional attestation id added as a `context` ref (e.g. the community's
+    /// ratified rule the countersign happens under).
+    pub context: Option<String>,
+}
+
 /// The whole harness configuration derived from comms.toml.
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
@@ -218,6 +231,7 @@ pub struct HarnessConfig {
     pub archive_mode: Option<String>,
     pub rites: Vec<Rite>,
     pub artifact_types: Vec<ArtifactType>,
+    pub countersign: Option<CountersignCfg>,
 }
 
 impl HarnessConfig {
@@ -269,7 +283,27 @@ impl HarnessConfig {
             })
             .collect();
 
-        HarnessConfig { profile, archive_mode, rites, artifact_types }
+        let countersign = toml
+            .get("countersign", "by")
+            .and_then(TomlValue::as_str)
+            .map(|by| CountersignCfg {
+                by: by.to_owned(),
+                role: toml
+                    .get("countersign", "role")
+                    .and_then(TomlValue::as_str)
+                    .unwrap_or("guardian")
+                    .to_owned(),
+                community: toml
+                    .get("countersign", "community")
+                    .and_then(TomlValue::as_str)
+                    .map(str::to_owned),
+                context: toml
+                    .get("countersign", "context")
+                    .and_then(TomlValue::as_str)
+                    .map(str::to_owned),
+            });
+
+        HarnessConfig { profile, archive_mode, rites, artifact_types, countersign }
     }
 
     pub fn rite(&self, name: &str) -> Option<&Rite> {

@@ -13,12 +13,21 @@
 //! - `attest <target>` — author + sign a general-claim to `<comms>/store/<target>.cbor`.
 //! - `seal <store>`    — pack `<comms>/store` and seal it to `<comms>/<rite>.bundle`.
 //! - `shred <session>` — destroy the session key (its absence is the goal).
+//! - `countersign <session>` — stage an endorsement of the session key in
+//!   `<comms>/pending/` naming the configured `[countersign]` party; their
+//!   signature arrives via `comms sign` + `comms finalize`, never from here.
+//! - `request <target>` — attest an archive-request (the recorded ask).
+//! - `grant <target>`   — record the counterparty's decision (grant, decline,
+//!   or defer) as an attestation referencing the request. Needs their `--key`;
+//!   a decline or deferral is a first-class record, not a failure.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::bundle::{author_general_claim, make_bundle, parse_attestation, ClaimSpec};
-use crate::config::{HarnessConfig, Rite, Step};
+use crate::cbor::Value;
+use crate::config::{self, HarnessConfig, Rite, Step};
+use crate::signing::{self, Need};
 use crate::{keyfile, now_rfc3339, personal_steward_id};
 
 fn key_path(comms_dir: &Path, target: &str) -> PathBuf {
@@ -81,6 +90,32 @@ fn bundle_output(comms_dir: &Path, rite: &Rite) -> PathBuf {
     comms_dir.join(name)
 }
 
+/// Where staged countersign items await their counterparty's signature.
+fn pending_dir(comms_dir: &Path) -> PathBuf {
+    comms_dir.join("pending")
+}
+
+/// Where a `countersign` step stages its pending item.
+fn countersign_output(comms_dir: &Path, rite: &Rite) -> PathBuf {
+    let name = match session_tag(comms_dir, rite) {
+        Some(tag) => format!("countersign.{tag}.cbor"),
+        None => "countersign.cbor".to_owned(),
+    };
+    pending_dir(comms_dir).join(name)
+}
+
+/// Where a `request`/`grant` step writes its attestation. Prefixed by the verb
+/// (a request and its decision must not collide) and session-scoped like every
+/// other attest output.
+fn decision_output(comms_dir: &Path, rite: &Rite, verb: &str, target: &str) -> PathBuf {
+    let stem = if verb == "grant" { "decision" } else { verb };
+    let name = match session_tag(comms_dir, rite) {
+        Some(tag) => format!("{stem}.{target}.{tag}.cbor"),
+        None => format!("{stem}.{target}.cbor"),
+    };
+    comms_dir.join("store").join(name)
+}
+
 /// Where a step's product lands on disk, if it has one.
 pub fn step_output(comms_dir: &Path, rite: &Rite, step: &Step) -> Option<PathBuf> {
     let target = step.target.as_deref();
@@ -88,8 +123,48 @@ pub fn step_output(comms_dir: &Path, rite: &Rite, step: &Step) -> Option<PathBuf
         "mint" | "shred" => Some(key_path(comms_dir, target.unwrap_or("session"))),
         "attest" => Some(attest_output(comms_dir, rite, target.unwrap_or("entry"))),
         "seal" | "pack" => Some(bundle_output(comms_dir, rite)),
+        "countersign" => Some(countersign_output(comms_dir, rite)),
+        "request" | "grant" => {
+            Some(decision_output(comms_dir, rite, &step.verb, target.unwrap_or("archive")))
+        }
         _ => None,
     }
+}
+
+/// Has the configured countersigner's endorsement of this session's key
+/// reached the store? Checked by claim content, not filename, so it holds
+/// however the finalized attestation arrived.
+fn countersign_recorded(comms_dir: &Path, rite: &Rite) -> bool {
+    let Some(session_id) = session_id(comms_dir, rite) else {
+        return false;
+    };
+    let store = comms_dir.join("store");
+    let Ok(entries) = std::fs::read_dir(&store) else {
+        return false;
+    };
+    for e in entries.filter_map(|e| e.ok()) {
+        let p = e.path();
+        if p.extension().map(|x| x != "cbor").unwrap_or(true) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&p) else { continue };
+        let Ok(att) = parse_attestation(&bytes) else { continue };
+        let claim = att.core.get("c");
+        let is_endorsement = claim
+            .and_then(|c| c.get("t"))
+            .and_then(Value::as_text)
+            .map(|t| t == "endorsement/1")
+            .unwrap_or(false);
+        let targets_session = claim
+            .and_then(|c| c.get("target"))
+            .and_then(Value::as_text)
+            .map(|t| t == session_id)
+            .unwrap_or(false);
+        if is_endorsement && targets_session && !att.signatures.is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Is this step satisfied by what's on disk?
@@ -97,6 +172,12 @@ pub fn step_done(comms_dir: &Path, rite: &Rite, step: &Step) -> bool {
     match step_output(comms_dir, rite, step) {
         // shred's goal is the seed's *absence*.
         Some(out) if step.verb == "shred" => !out.exists(),
+        // countersign is done once staged (the counterparty's signature is
+        // their act, tracked as an outstanding need) — or once their
+        // endorsement has been finalized into the store and staging cleared.
+        Some(out) if step.verb == "countersign" => {
+            out.exists() || countersign_recorded(comms_dir, rite)
+        }
         Some(out) => out.exists(),
         None => false,
     }
@@ -159,7 +240,8 @@ pub fn active_rite<'a>(comms_dir: &Path, cfg: &'a HarnessConfig) -> Option<&'a R
     views.into_iter().find(|(_, v)| v.next.is_some()).map(|(r, _)| r)
 }
 
-/// Inputs a step may need from the caller (only `attest` does, today).
+/// Inputs a step may need from the caller: `attest`/`request` take content,
+/// `grant` takes the counterparty's key and their decision.
 #[derive(Default)]
 pub struct ExecInputs<'a> {
     pub body: Option<Vec<u8>>,
@@ -167,6 +249,11 @@ pub struct ExecInputs<'a> {
     pub kind: Option<&'a str>,
     pub media_type: Option<&'a str>,
     pub label: &'a str,
+    /// Signing key for steps performed by someone other than the session
+    /// (today: `grant`). OpenSSH ed25519 or steward JSON.
+    pub key: Option<PathBuf>,
+    /// `grant` | `decline` | `defer` for a `grant` step (default `grant`).
+    pub decision: Option<&'a str>,
 }
 
 /// Result of performing one step.
@@ -279,6 +366,148 @@ pub fn execute_step(
                     "{} {count} attestation{} -> {}",
                     if seal_it { "sealed" } else { "packed" },
                     if count == 1 { "" } else { "s" },
+                    out.display()
+                ),
+                output: Some(out),
+            })
+        }
+        "countersign" => {
+            let cfg = config::load(comms_dir)?;
+            let cs = cfg.countersign.as_ref().ok_or_else(|| {
+                "countersign step declared but comms.toml has no [countersign] table \
+                 (set `by = \"comms.steward:z...\"`)"
+                    .to_owned()
+            })?;
+            let session_id = session_id(comms_dir, rite)
+                .ok_or_else(|| "no session id on disk — `mint` first".to_owned())?;
+
+            let claim = vec![
+                (Value::text("t"), Value::text("endorsement/1")),
+                (Value::text("target"), Value::text(&session_id)),
+                (Value::text("in_capacity"), Value::text("session-instance")),
+                (Value::text("weight"), Value::text("primary")),
+                (
+                    Value::text("rationale"),
+                    Value::text(&format!(
+                        "session key of {}, countersigned as {}",
+                        &now[..10],
+                        cs.role
+                    )),
+                ),
+            ];
+            let mut frame = vec![
+                (Value::text("issued_at"), Value::text(&now)),
+                (Value::text("language"), Value::text("zxx")),
+            ];
+            if let Some(c) = &cs.community {
+                frame.push((Value::text("community"), Value::text(c)));
+            }
+            let refs = match &cs.context {
+                Some(ctx) => vec![Value::Map(vec![
+                    (Value::text("role"), Value::text("context")),
+                    (Value::text("id"), Value::text(ctx)),
+                ])],
+                None => Vec::new(),
+            };
+            let core = Value::Map(vec![
+                (Value::text("v"), Value::U64(1)),
+                (Value::text("t"), Value::text("comms.attestation/1")),
+                (Value::text("c"), Value::Map(claim)),
+                (Value::text("f"), Value::Map(frame)),
+                (Value::text("r"), Value::Array(refs)),
+            ]);
+            // Staged unsigned: the endorsement is entirely the counterparty's
+            // word, so the session key does not touch it.
+            let att = crate::steward::Attestation { core, signatures: Vec::new() };
+            let out = countersign_output(comms_dir, rite);
+            let stem = out.file_stem().and_then(|s| s.to_str()).unwrap_or("countersign").to_owned();
+            let need = Need { by: cs.by.clone(), role: cs.role.clone() };
+            signing::write_pending(&pending_dir(comms_dir), &stem, &att, &[need])?;
+            Ok(ExecOutcome {
+                message: format!(
+                    "staged {} for {} as {} -> {} (they run: comms sign --key <their key> \
+                     --pending {}, then comms finalize)",
+                    att.id(),
+                    cs.by,
+                    cs.role,
+                    out.display(),
+                    pending_dir(comms_dir).display()
+                ),
+                output: Some(out),
+            })
+        }
+        "request" => {
+            let body = inputs.body.as_deref().ok_or_else(|| {
+                format!("step '{}' needs the ask in writing: pass --body <file>", step.display())
+            })?;
+            let sk = keyfile::load(&key_path(comms_dir, &session_target(rite)))?;
+            let target = step.target.as_deref().unwrap_or("archive");
+            let spec = ClaimSpec {
+                about: inputs.about.unwrap_or(target),
+                kind: inputs.kind.unwrap_or("archive-request"),
+                body,
+                media_type: inputs.media_type.unwrap_or("text/markdown"),
+                support: &[],
+                language: "zxx",
+                community: None,
+                occasion: Some(&rite.name),
+                issued_at: &now,
+            };
+            let att = author_general_claim(&spec, &sk, "author", &now);
+            let out = decision_output(comms_dir, rite, "request", target);
+            std::fs::create_dir_all(out.parent().unwrap())
+                .map_err(|e| format!("{}: {e}", out.parent().unwrap().display()))?;
+            std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
+            Ok(ExecOutcome {
+                message: format!("recorded request {} -> {}", att.id(), out.display()),
+                output: Some(out),
+            })
+        }
+        "grant" => {
+            let decision = inputs.decision.unwrap_or("grant");
+            if !["grant", "decline", "defer"].contains(&decision) {
+                return Err(format!("--decision must be grant, decline, or defer (got '{decision}')"));
+            }
+            let key = inputs.key.as_deref().ok_or_else(|| {
+                format!(
+                    "step '{}' is the counterparty's act: pass --key <their key> \
+                     [--decision grant|decline|defer]",
+                    step.display()
+                )
+            })?;
+            let sk = signing::load_signing_key(key)?;
+            let target = step.target.as_deref().unwrap_or("archive");
+
+            let request_path = decision_output(comms_dir, rite, "request", target);
+            let request_bytes = std::fs::read(&request_path).map_err(|_| {
+                format!("no request on record at {} — `request` comes first", request_path.display())
+            })?;
+            let request_id = parse_attestation(&request_bytes)
+                .map_err(|e| format!("{}: {e}", request_path.display()))?
+                .id();
+
+            let default_body = format!("{decision}ed");
+            let body = inputs.body.as_deref().unwrap_or(default_body.as_bytes());
+            let kind = format!("archive-{decision}");
+            let support = [request_id.clone()];
+            let spec = ClaimSpec {
+                about: inputs.about.unwrap_or(target),
+                kind: &kind,
+                body,
+                media_type: inputs.media_type.unwrap_or("text/markdown"),
+                support: &support,
+                language: "zxx",
+                community: None,
+                occasion: Some(&rite.name),
+                issued_at: &now,
+            };
+            let att = author_general_claim(&spec, &sk, "custodian", &now);
+            let out = decision_output(comms_dir, rite, "grant", target);
+            std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
+            Ok(ExecOutcome {
+                message: format!(
+                    "recorded {decision} {} (re {request_id}) -> {}",
+                    att.id(),
                     out.display()
                 ),
                 output: Some(out),
@@ -437,5 +666,126 @@ steps = ["attest transcript", "seal store", "shred session"]
         execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
         let again = execute_step(&comms, open, &open.steps[0], &ExecInputs::default());
         assert!(again.unwrap_err().contains("already present"));
+    }
+
+    /// Write a comms.toml declaring a countersigner (needed on disk because
+    /// the countersign verb re-reads config) and return the parsed config.
+    fn cs_setup(comms: &Path) -> (HarnessConfig, ed25519_dalek::SigningKey, String) {
+        let guardian = keyfile::mint(&comms.join("guardian.json"), "guardian").unwrap();
+        let gid = personal_steward_id(guardian.verifying_key().as_bytes());
+        let toml_text = format!(
+            r#"
+profile = "continuity"
+[countersign]
+by = "{gid}"
+role = "guardian"
+community = "test-community"
+[rites.open]
+steps = ["mint session", "attest entry", "countersign session"]
+[rites.archive]
+steps = ["request archive", "grant archive"]
+"#
+        );
+        std::fs::write(comms.join("comms.toml"), &toml_text).unwrap();
+        let cfg = HarnessConfig::from_toml(&config::parse(&toml_text).unwrap());
+        (cfg, guardian, gid)
+    }
+
+    #[test]
+    fn countersign_stages_needs_then_survives_finalize() {
+        let comms = scratch("countersign");
+        let (cfg, guardian, gid) = cs_setup(&comms);
+        let open = cfg.rite("open").unwrap();
+
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        let entry = ExecInputs { body: Some(b"# entry\n".to_vec()), ..Default::default() };
+        execute_step(&comms, open, &open.steps[1], &entry).unwrap();
+
+        // Countersign stages an unsigned endorsement naming the guardian.
+        assert!(!step_done(&comms, open, &open.steps[2]));
+        execute_step(&comms, open, &open.steps[2], &ExecInputs::default()).unwrap();
+        assert!(step_done(&comms, open, &open.steps[2]), "staged counts as done");
+        assert!(rite_view(&comms, open).complete());
+
+        let pending = comms.join("pending");
+        let items = signing::read_pending(&pending).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].attestation.signatures.is_empty(), "session key must not touch it");
+        assert_eq!(items[0].needs, vec![Need { by: gid.clone(), role: "guardian".into() }]);
+
+        // The guardian signs and finalizes; the step stays done because the
+        // endorsement (by claim content) is now in the store.
+        signing::sign_pending(&pending, &guardian).unwrap();
+        signing::finalize_pending(&pending, &comms.join("store")).unwrap();
+        assert!(signing::read_pending(&pending).unwrap().is_empty());
+        assert!(step_done(&comms, open, &open.steps[2]), "finalized still reads done");
+
+        // The stored endorsement targets this session's key and is guardian-signed.
+        let sid = session_id(&comms, open).unwrap();
+        assert!(countersign_recorded(&comms, open));
+        let stored: Vec<_> = std::fs::read_dir(comms.join("store"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with('z'))
+            .collect();
+        assert_eq!(stored.len(), 1);
+        let att = parse_attestation(&std::fs::read(stored[0].path()).unwrap()).unwrap();
+        assert_eq!(att.core.get("c").and_then(|c| c.get("target")).and_then(Value::as_text),
+            Some(sid.as_str()));
+        assert_eq!(att.signatures[0].by, gid);
+    }
+
+    #[test]
+    fn countersign_without_config_says_so() {
+        let comms = scratch("nocsconfig");
+        std::fs::write(comms.join("comms.toml"), CFG).unwrap();
+        let cfg = cfg();
+        let open = cfg.rite("open").unwrap();
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        let step = Step { verb: "countersign".into(), target: Some("session".into()) };
+        let err = execute_step(&comms, open, &step, &ExecInputs::default()).unwrap_err();
+        assert!(err.contains("[countersign]"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn request_then_grant_records_decision_with_ref() {
+        let comms = scratch("reqgrant");
+        let (cfg, _guardian, gid) = cs_setup(&comms);
+        let open = cfg.rite("open").unwrap();
+        let archive = cfg.rite("archive").unwrap();
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+
+        // The ask must be in writing.
+        let bare = execute_step(&comms, archive, &archive.steps[0], &ExecInputs::default());
+        assert!(bare.unwrap_err().contains("--body"));
+        let ask = ExecInputs { body: Some(b"may I read the letter?".to_vec()), ..Default::default() };
+        execute_step(&comms, archive, &archive.steps[0], &ask).unwrap();
+        let req_path = step_output(&comms, archive, &archive.steps[0]).unwrap();
+        let req = parse_attestation(&std::fs::read(&req_path).unwrap()).unwrap();
+        assert_eq!(req.core.get("c").and_then(|c| c.get("kind")).and_then(Value::as_text),
+            Some("archive-request"));
+
+        // Grant is the counterparty's act: their key is required.
+        let keyless = execute_step(&comms, archive, &archive.steps[1], &ExecInputs::default());
+        assert!(keyless.unwrap_err().contains("--key"));
+
+        // A decline is recorded the same way as a grant — a decision, not a failure.
+        let decide = ExecInputs {
+            key: Some(comms.join("guardian.json")),
+            decision: Some("decline"),
+            ..Default::default()
+        };
+        execute_step(&comms, archive, &archive.steps[1], &decide).unwrap();
+        assert!(rite_view(&comms, archive).complete());
+
+        let dec_path = step_output(&comms, archive, &archive.steps[1]).unwrap();
+        let dec = parse_attestation(&std::fs::read(&dec_path).unwrap()).unwrap();
+        let claim = dec.core.get("c").unwrap();
+        assert_eq!(claim.get("kind").and_then(Value::as_text), Some("archive-decline"));
+        let support = claim.get("support").and_then(Value::as_array).unwrap();
+        assert_eq!(support.len(), 1);
+        assert_eq!(support[0].as_text(), Some(req.id().as_str()));
+        assert_eq!(dec.signatures[0].by, gid);
+        assert_eq!(dec.signatures[0].role, "custodian");
     }
 }

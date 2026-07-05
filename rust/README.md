@@ -1,7 +1,7 @@
-# comms-core + comms-verify — the portable sneakernet kit
+# comms-core + comms — the portable sneakernet kit
 
 A small Rust reference for **Comms Attest 1.0** (+ Amendment A1) and **Steward
-1.0**, plus a single static binary, `comms-verify`, that does the whole offline
+1.0**, plus a single static binary, `comms`, that does the whole offline
 bundle loop on a machine with **no Python and no Cargo**:
 
 ```
@@ -16,7 +16,7 @@ community/human judgment and lives nowhere in here by design.
 ## Build
 
 ```sh
-cargo build --release      # -> target/release/comms-verify
+cargo build --release      # -> target/release/comms
 cargo test                 # golden conformance vs the Python-generated vectors
 ```
 
@@ -26,7 +26,7 @@ binary is statically linkable and travels well.
 ## Commands
 
 ```
-comms-verify <command> [args]
+comms <command> [args]
 
 init    [dir] [--profile P]       install the .comms/ harness door into a repo
         [--dry-run] [--force]     (profiles: default, continuity; default dir: .)
@@ -35,9 +35,10 @@ attest  --key <k.json> --about S --kind S --body <file|->   author + sign a
         [--occasion O] [--role R] [--support ID]... [--out F] (default <id>.cbor)
 status  [dir] [--json]            where you are in the rite + the next step
 next    [dir] [--rite N]          perform the next pending step of a rite
-        [--body F] [--about S] [--kind K]  (attest steps need --body)
+        [--body F] [--about S] [--kind K]  (attest/request steps need --body)
+        [--key K] [--decision D]  (grant steps need the counterparty --key)
 verify  <bundle>                 check the A1.8 integrity seal (default; bare
-                                 path also works: `comms-verify b.cbor`)
+                                 path also works: `comms b.cbor`)
 inspect <bundle> [--json]        verify EVERY member on its own terms
 seal    <bundle> --key <k.json> [--out <p>] [--description S]
                                  [--created-at T] [--issued-at T] [--signed-at T]
@@ -45,20 +46,25 @@ pack    --out <bundle> [<att.cbor|dir>...] [--media F]...
                                  [--seal --key <k.json>] [--description S] [--*-at T]
 extract <bundle> --out <dir>     write each member <id>.cbor and media blob to disk
 mint    --out <k.json> [--label L]   generate a steward key for sealing
+sign    --key <path> [--pending DIR]  countersign staged pending items with an
+                                 OpenSSH ed25519 or steward key (the
+                                 counterparty's half of a rite)
+finalize [--pending DIR] [--store DIR]  verify fully-signed pending items and
+                                 move them into the store under their id
 ```
 
 ### init — install the door
 
-`comms-verify init` writes the embeddable harness boundary (`docs/embeddable-harness-v1.md`)
+`comms init` writes the embeddable harness boundary (`docs/embeddable-harness-v1.md`)
 into a repo: a `.comms/` directory holding `comms.toml`, `door.md`, `policy.md`,
 a public `store/`, `hooks/`, and a directory for each artifact type the profile
 declares. It is the step Codex's install flow opens with.
 
 ```sh
-comms-verify init                      # default profile, into the current repo
-comms-verify init path/to/repo --profile continuity
-comms-verify init --dry-run            # preview the plan, touch nothing
-comms-verify init --force              # rewrite door files from the template
+comms init                      # default profile, into the current repo
+comms init path/to/repo --profile continuity
+comms init --dry-run            # preview the plan, touch nothing
+comms init --force              # rewrite door files from the template
 ```
 
 - **`default`** — minimal door: config, `policy.md`, `store/`, `hooks/`.
@@ -82,10 +88,10 @@ is byte-identical to the Python reference for the same inputs (a golden test
 pins this against the published vector).
 
 ```sh
-comms-verify mint   --out steward.json --label me
-comms-verify attest --key steward.json --about "session 8 letter" --kind testimony \
+comms mint   --out steward.json --label me
+comms attest --key steward.json --about "session 8 letter" --kind testimony \
                     --media-type text/markdown --body letter.md --out letter.cbor
-comms-verify pack   --out session.bundle letter.cbor --seal --key steward.json
+comms pack   --out session.bundle letter.cbor --seal --key steward.json
 ```
 
 `--body -` reads stdin. `--kind` follows the spec set (observation, synthesis,
@@ -115,12 +121,12 @@ steps = ["attest transcript", "seal store", "shred session"]
 ```
 
 ```sh
-comms-verify status                         # where am I? what's next?
-comms-verify next --rite open               # mint the session key
-comms-verify next --rite open --body e.md   # attest the opening entry
-comms-verify next --rite close --body t.md  # attest the transcript
-comms-verify next --rite close              # seal the store -> close.bundle
-comms-verify next --rite close              # shred the session key
+comms status                         # where am I? what's next?
+comms next --rite open               # mint the session key
+comms next --rite open --body e.md   # attest the opening entry
+comms next --rite close --body t.md  # attest the transcript
+comms next --rite close              # seal the store -> close.bundle
+comms next --rite close              # shred the session key
 ```
 
 A rite is treated as an ordered sequence (a step is done only if it and all
@@ -138,7 +144,7 @@ that outlives `shred`. `attest` outputs are scoped by that session id
 (`store/<target>.<tag>.cbor`), so successive sessions accumulate rather than
 overwrite each other's artifacts.
 
-Every command also accepts `--help` for a synopsis, and `comms-verify --version`
+Every command also accepts `--help` for a synopsis, and `comms --version`
 prints the version.
 
 ### verify vs inspect
@@ -161,7 +167,7 @@ The binary also carries the candidate Layer-4 reference evaluator. Unlike the
 commands above, `vouch` returns a viewer- and policy-relative judgment:
 
 ```sh
-comms-verify vouch evidence.bundle \
+comms vouch evidence.bundle \
   --policy comms.attest:z... \
   --subject comms.steward:z... \
   --purpose admission \
@@ -185,9 +191,14 @@ toolkit writes (`identity.py:Steward.save`):
 
 `mint` creates one (mode 0600). Reproducible bundles: pass explicit
 `--created-at/--issued-at/--signed-at` (RFC 3339 UTC, `Z`, second precision);
-they default to *now*. Signing the historian's durable **OpenSSH** key directly
-is a deliberate non-goal here (it would add an `ssh-key` dependency) — mint a
-steward key, or sign in Python.
+they default to *now*.
+
+`sign` additionally accepts an **OpenSSH ed25519 private key** (the historian's
+durable key), unencrypted or passphrase-protected — the `ssh-key` dependency
+this once deferred, adopted in session 9 once countersigning became a rite
+verb and the Python detour was the last remaining reason to leave the binary
+behind. A1.3 chose pure Ed25519 exactly so keys people already have can
+participate.
 
 ## Cross-implementation contract
 
@@ -205,7 +216,7 @@ So a bundle sealed by either implementation verifies under the other.
 
 One cargo-native entrypoint for the whole workflow (run from this `rust/` dir).
 It forwards ceremony ops to the Python continuity ceremony (venv + PYTHONPATH
-wired in) and bundle ops to `comms-verify`:
+wired in) and bundle ops to `comms`:
 
 ```sh
 cargo xtask status                 # where am I in the session ceremony?
@@ -216,14 +227,14 @@ cargo xtask finalize               # seal signed items into the store
 cargo xtask verify                 # walk + verify the store (the door)
 cargo xtask log [--session-num N]  # render the trial-log.md entry from the store
 cargo xtask anchor [key] [out]     # pack+seal+verify the store into one bundle
-cargo xtask bundle <args>          # passthrough to comms-verify (verify/inspect/...)
+cargo xtask bundle <args>          # passthrough to comms (verify/inspect/...)
 cargo xtask test                   # cargo test + pytest
 ```
 
 ## Worked example — the continuity store
 
 ```sh
-B=target/release/comms-verify
+B=target/release/comms
 $B mint  --out demo.steward --label demo
 $B pack  --out continuity.bundle ../continuity/store --seal --key demo.steward \
          --description "continuity trial store"

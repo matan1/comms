@@ -111,6 +111,44 @@
           "signature_hex": "ca737c31b4d014c91e44a55fb31e47e03250bff725c6ee939112b5480c3f436631923c6e0936fdb6c83721dedd67f0a31a32beeff41fbc8c01e4523b67c56f0c"
         }
       ]
+    },
+    {
+      "name": "detached body (A2.1): content commits to {body_b3, body_len}",
+      "core": {
+        "v": 1,
+        "t": "comms.attestation/1",
+        "c": {
+          "t": "general-claim/1",
+          "about": "comms.steward:z9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu",
+          "kind": "observation",
+          "content": {
+            "media_type": "text/plain;charset=utf-8",
+            "body_b3_hex": "76c36f06b3a2e52ca8af8beab34db532757a81aecb6ea764c11570fd988d9d86",
+            "body_len": 44
+          },
+          "support": []
+        },
+        "f": {
+          "issued_at": "2026-06-11T04:00:00Z",
+          "language": "en"
+        },
+        "r": []
+      },
+      "body_utf8": "The northern field was sown on the new moon.",
+      "body_b3_hex": "76c36f06b3a2e52ca8af8beab34db532757a81aecb6ea764c11570fd988d9d86",
+      "body_len": 44,
+      "canonical_core_cbor_hex": "a56163a561746f67656e6572616c2d636c61696d2f31646b696e646b6f62736572766174696f6e6561626f7574783b636f6d6d732e737465776172643a7a39685352365337575074786d546f6a676f364747336b347944506563674a593239326a37787273554757427567636f6e74656e74a367626f64795f6233582076c36f06b3a2e52ca8af8beab34db532757a81aecb6ea764c11570fd988d9d8668626f64795f6c656e182c6a6d656469615f747970657818746578742f706c61696e3b636861727365743d7574662d3867737570706f7274806166a2686c616e677561676562656e696973737565645f617474323032362d30362d31315430343a30303a30305a617280617473636f6d6d732e6174746573746174696f6e2f31617601",
+      "core_hash_hex": "0f0425d43790f3ec665c8e23c16fc412ae802929162d211e4dd6a0451be85c92",
+      "attestation_id": "comms.attest:z21cnTcrYPGw8LrUYEBtXUgW27SnMNsWi2UPyrL5v7WVf",
+      "signatures": [
+        {
+          "by": "comms.steward:zAKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
+          "role": "author",
+          "signed_at": "2026-06-11T04:00:01Z",
+          "sig_payload_cbor_hex": "a661746b636f6d6d732e7369672f31626279783b636f6d6d732e737465776172643a7a414b6e4c344e4e66334447575a4a533663506b6e427545476e5673563441346d35746765624c486152535a3963616c67676564323535313964636f726558200f0425d43790f3ec665c8e23c16fc412ae802929162d211e4dd6a0451be85c9264726f6c6566617574686f72697369676e65645f617474323032362d30362d31315430343a30303a30315a",
+          "signature_hex": "a8506225b25d40a6437249988cbd243e6faaf8f62f7903ecb05236c1a8557159a1b7a11490fd0211fbaf4b595a0762a222d742dbdcd3221d388a542263c47303"
+        }
+      ]
     }
   ],
   "negative_vectors": [
@@ -121,6 +159,22 @@
     {
       "name": "cross-context replay must fail",
       "description": "A blake3 hash of the core computed WITHOUT the domain separation prefix must not verify as a core hash."
+    },
+    {
+      "name": "content with both body and body_b3 must be rejected (A2.1)",
+      "description": "Exactly one of body/body_b3; this core carries both and must fail layer-1 structural validation.",
+      "canonical_core_cbor_hex": "a56163a561746f67656e6572616c2d636c61696d2f31646b696e646b6f62736572766174696f6e6561626f7574783b636f6d6d732e737465776172643a7a39685352365337575074786d546f6a676f364747336b347944506563674a593239326a37787273554757427567636f6e74656e74a464626f6479582c546865206e6f72746865726e206669656c642077617320736f776e206f6e20746865206e6577206d6f6f6e2e67626f64795f6233582076c36f06b3a2e52ca8af8beab34db532757a81aecb6ea764c11570fd988d9d8668626f64795f6c656e182c6a6d656469615f747970657818746578742f706c61696e3b636861727365743d7574662d3867737570706f7274806166a2686c616e677561676562656e696973737565645f617474323032362d30362d31315430343a30303a30305a617280617473636f6d6d732e6174746573746174696f6e2f31617601"
+    },
+    {
+      "name": "content with neither body nor body_b3 must be rejected (A2.1)",
+      "description": "Exactly one of body/body_b3; this core carries neither and must fail layer-1 structural validation.",
+      "canonical_core_cbor_hex": "a56163a561746f67656e6572616c2d636c61696d2f31646b696e646b6f62736572766174696f6e6561626f7574783b636f6d6d732e737465776172643a7a39685352365337575074786d546f6a676f364747336b347944506563674a593239326a37787273554757427567636f6e74656e74a16a6d656469615f747970657818746578742f706c61696e3b636861727365743d7574662d3867737570706f7274806166a2686c616e677561676562656e696973737565645f617474323032362d30362d31315430343a30303a30305a617280617473636f6d6d732e6174746573746174696f6e2f31617601"
+    },
+    {
+      "name": "mismatched detached body must report 'mismatched', not invalid",
+      "description": "Vector 4 with these bytes at hand must report body status 'mismatched' while the attestation itself still verifies; the bytes are retained and exportable (A2.2).",
+      "attestation_id": "comms.attest:z21cnTcrYPGw8LrUYEBtXUgW27SnMNsWi2UPyrL5v7WVf",
+      "wrong_body_utf8": "The northern field was sown at midday."
     }
   ]
 }

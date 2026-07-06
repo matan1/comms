@@ -69,6 +69,51 @@ def test_general_claim_body_str_and_bytes_agree():
     assert isinstance(a["content"]["body"], bytes)
 
 
+# ---- detached bodies (A2) --------------------------------------------------------
+
+def test_general_claim_detached_roundtrip(alice):
+    """A detached claim commits to the body without carrying it; body status
+    is judged separately from validity (A2.1/A2.2)."""
+    from blake3 import blake3
+    body = b"a letter meant for the archive, not the repo"
+    claim = comms.claims.general_claim(
+        about="letters", kind="testimony",
+        body_b3=blake3(body).digest(), body_len=len(body))
+    att = comms.Attestation.build(claim).sign(alice)
+    again = comms.Attestation.from_cbor(att.to_cbor())
+    ok, why = again.verified()
+    assert ok, why
+    assert "body" not in again.claim["content"]
+    assert comms.body_status(again.claim["content"]) == "absent"
+    assert comms.body_status(again.claim["content"], body) == "verified"
+    assert comms.body_status(again.claim["content"], body + b"!") == "mismatched"
+
+
+def test_general_claim_exactly_one_body_form():
+    from blake3 import blake3
+    b3 = blake3(b"x").digest()
+    with pytest.raises(ValueError):
+        comms.claims.general_claim(about="x", kind="other")
+    with pytest.raises(ValueError):
+        comms.claims.general_claim(about="x", kind="other", body=b"x", body_b3=b3)
+    with pytest.raises(ValueError):
+        comms.claims.general_claim(about="x", kind="other", body_b3=b3)  # no len
+    with pytest.raises(ValueError):
+        comms.claims.general_claim(about="x", kind="other", body=b"x", body_len=1)
+
+
+def test_hand_rolled_two_body_forms_fail_structurally(alice):
+    """A content map carrying both forms is malformed at layer 1, however it
+    was produced."""
+    from blake3 import blake3
+    claim = comms.claims.general_claim(about="x", kind="other", body=b"x")
+    claim["content"]["body_b3"] = blake3(b"x").digest()
+    claim["content"]["body_len"] = 1
+    att = comms.Attestation.build(claim).sign(alice)
+    ok, why = att.structurally_valid()
+    assert not ok and "both" in why
+
+
 # ---- validation layers (A1.4) ----------------------------------------------------
 
 def test_unresolved_ref_is_awaiting_context_not_malformed(alice):

@@ -117,6 +117,41 @@ core3_hash = dsh(CTX_CORE, core3_cbor)
 attest3_id = "comms.attest:" + multibase_z(core3_hash)
 p3, s3 = sign(sk_w, id_w, "author", "2026-06-11T01:00:01Z", core3_hash)
 
+# --- vector 4: detached body (Amendment A2.1) -----------------------------------
+# The same prose as vector 1, but the claim commits to {body_b3, body_len}
+# instead of carrying the bytes. body_b3 is PLAIN blake3-256 (no domain
+# separation: it names a file, exactly as bundle media keys do).
+detached_body = "The northern field was sown on the new moon.".encode()
+detached_b3 = blake3.blake3(detached_body).digest()
+core4 = {
+    "v": 1,
+    "t": "comms.attestation/1",
+    "c": {
+        "t": "general-claim/1",
+        "about": id_w,
+        "kind": "observation",
+        "content": {"media_type": "text/plain;charset=utf-8",
+                    "body_b3": detached_b3,
+                    "body_len": len(detached_body)},
+        "support": [],
+    },
+    "f": {"issued_at": "2026-06-11T04:00:00Z", "language": "en"},
+    "r": [],
+}
+core4_cbor = canon(core4)
+core4_hash = dsh(CTX_CORE, core4_cbor)
+attest4_id = "comms.attest:" + multibase_z(core4_hash)
+p4, s4 = sign(sk_a, id_a, "author", "2026-06-11T04:00:01Z", core4_hash)
+
+# A2 negative cores: both forms / neither form — must be rejected at layer 1
+# (structural), regardless of any signature.
+core_both = {**core4, "c": {**core4["c"], "content": {
+    "media_type": "text/plain;charset=utf-8",
+    "body": detached_body, "body_b3": detached_b3,
+    "body_len": len(detached_body)}}}
+core_neither = {**core4, "c": {**core4["c"], "content": {
+    "media_type": "text/plain;charset=utf-8"}}}
+
 vectors = {
     "scheme": {
         "hash": "blake3-256, domain separated: H(ctx,data)=blake3(uint8(len(ctx))||ctx||data)",
@@ -155,6 +190,20 @@ vectors = {
          "signatures": [
              {"by": id_w, "role": "author", "signed_at": "2026-06-11T01:00:01Z",
               "sig_payload_cbor_hex": p3.hex(), "signature_hex": s3.hex()}]},
+        {"name": "detached body (A2.1): content commits to {body_b3, body_len}",
+         "core": {**core4, "c": {**core4["c"], "content": {
+             "media_type": core4["c"]["content"]["media_type"],
+             "body_b3_hex": detached_b3.hex(),
+             "body_len": len(detached_body)}}},
+         "body_utf8": detached_body.decode(),
+         "body_b3_hex": detached_b3.hex(),
+         "body_len": len(detached_body),
+         "canonical_core_cbor_hex": core4_cbor.hex(),
+         "core_hash_hex": core4_hash.hex(),
+         "attestation_id": attest4_id,
+         "signatures": [
+             {"by": id_a, "role": "author", "signed_at": "2026-06-11T04:00:01Z",
+              "sig_payload_cbor_hex": p4.hex(), "signature_hex": s4.hex()}]},
     ],
     "negative_vectors": [
         {"name": "role swap must fail",
@@ -163,6 +212,20 @@ vectors = {
         {"name": "cross-context replay must fail",
          "description": "A blake3 hash of the core computed WITHOUT the domain "
                         "separation prefix must not verify as a core hash."},
+        {"name": "content with both body and body_b3 must be rejected (A2.1)",
+         "description": "Exactly one of body/body_b3; this core carries both and "
+                        "must fail layer-1 structural validation.",
+         "canonical_core_cbor_hex": canon(core_both).hex()},
+        {"name": "content with neither body nor body_b3 must be rejected (A2.1)",
+         "description": "Exactly one of body/body_b3; this core carries neither and "
+                        "must fail layer-1 structural validation.",
+         "canonical_core_cbor_hex": canon(core_neither).hex()},
+        {"name": "mismatched detached body must report 'mismatched', not invalid",
+         "description": "Vector 4 with these bytes at hand must report body status "
+                        "'mismatched' while the attestation itself still verifies; "
+                        "the bytes are retained and exportable (A2.2).",
+         "attestation_id": attest4_id,
+         "wrong_body_utf8": "The northern field was sown at midday."},
     ],
 }
 

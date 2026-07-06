@@ -306,6 +306,8 @@ mod tests {
             body,
             media_type: "text/plain",
             support: &[],
+            detach: false,
+            refs: &[],
             language: "zxx",
             community: None,
             occasion: None,

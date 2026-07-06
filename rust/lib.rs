@@ -6,6 +6,7 @@
 //! contains no notion of trust: a `true` from any verify function here means
 //! "the math holds," never "believe this."
 
+pub mod archive;
 pub mod bundle;
 pub mod cbor;
 pub mod config;

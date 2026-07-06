@@ -15,14 +15,20 @@ import a1
 
 
 def wire_core(vector_core: dict) -> dict:
-    """The JSON projection renders textual bodies as body_utf8; the wire form
-    carries body as bytes (A1.6)."""
+    """The JSON projection renders textual bodies as body_utf8 and detached
+    hashes as body_b3_hex; the wire form carries bytes (A1.6, A2.1)."""
     core = {**vector_core, "c": {**vector_core["c"]}}
     content = core["c"].get("content")
     if content and "body_utf8" in content:
         core["c"]["content"] = {
             "media_type": content["media_type"],
             "body": content["body_utf8"].encode("utf-8"),
+        }
+    elif content and "body_b3_hex" in content:
+        core["c"]["content"] = {
+            "media_type": content["media_type"],
+            "body_b3": bytes.fromhex(content["body_b3_hex"]),
+            "body_len": content["body_len"],
         }
     return core
 
@@ -43,7 +49,7 @@ def test_published_keys(attest_vectors):
         assert a1.pub_from_steward_id(k["steward_id"]) == pub
 
 
-@pytest.mark.parametrize("idx", [0, 2])
+@pytest.mark.parametrize("idx", [0, 2, 3])
 def test_canonical_encoding_hash_and_id(attest_vectors, idx):
     v = attest_vectors["vectors"][idx]
     core = wire_core(v["core"])
@@ -53,7 +59,7 @@ def test_canonical_encoding_hash_and_id(attest_vectors, idx):
     assert a1.attest_id(core) == v["attestation_id"], "attestation id"
 
 
-@pytest.mark.parametrize("idx", [0, 2])
+@pytest.mark.parametrize("idx", [0, 2, 3])
 def test_canonical_form_roundtrips(attest_vectors, idx):
     import cbor2
     v = attest_vectors["vectors"][idx]
@@ -115,3 +121,65 @@ def test_negative_cross_context_replay_fails(attest_vectors):
     pub = a1.pub_from_steward_id(sig["by"])
     with pytest.raises(BadSignatureError):
         VerifyKey(pub).verify(forged_payload, bytes.fromhex(sig["signature_hex"]))
+
+
+# ---- Amendment A2: detached bodies ------------------------------------------
+
+def _a2_negative(attest_vectors, name_part: str) -> dict:
+    return next(n for n in attest_vectors["negative_vectors"]
+                if name_part in n["name"])
+
+
+def test_a2_detached_vector_verifies_and_commits(attest_vectors):
+    """Vector 4's commitment is the plain blake3 of the published body, and the
+    reference implementation judges body status per A2.2."""
+    from comms.attest import Attestation, body_status
+    v = attest_vectors["vectors"][3]
+    core = wire_core(v["core"])
+    body = v["body_utf8"].encode("utf-8")
+    assert blake3.blake3(body).digest().hex() == v["body_b3_hex"]
+    assert len(body) == v["body_len"]
+
+    att = Attestation(claim=core["c"], frame=core["f"], refs=core["r"],
+                      signatures=[full_sig(s) for s in v["signatures"]])
+    ok, why = att.verified()
+    assert ok, why
+    content = att.claim["content"]
+    assert body_status(content) == "absent"          # no bytes at hand: normal
+    assert body_status(content, body) == "verified"
+
+
+def test_a2_negative_both_forms_rejected(attest_vectors):
+    """Exactly one of body/body_b3 (A2.1): both present fails layer 1."""
+    import cbor2
+    from comms.attest import Attestation
+    n = _a2_negative(attest_vectors, "both body and body_b3")
+    core = cbor2.loads(bytes.fromhex(n["canonical_core_cbor_hex"]))
+    att = Attestation(claim=core["c"], frame=core["f"], refs=core["r"])
+    ok, why = att.structurally_valid()
+    assert not ok and "both" in why
+
+
+def test_a2_negative_neither_form_rejected(attest_vectors):
+    import cbor2
+    from comms.attest import Attestation
+    n = _a2_negative(attest_vectors, "neither body nor body_b3")
+    core = cbor2.loads(bytes.fromhex(n["canonical_core_cbor_hex"]))
+    att = Attestation(claim=core["c"], frame=core["f"], refs=core["r"])
+    ok, why = att.structurally_valid()
+    assert not ok and "neither" in why
+
+
+def test_a2_mismatched_body_is_reported_not_fatal(attest_vectors):
+    """Wrong bytes at hand: the attestation still verifies (the math holds),
+    the body status says mismatched — separable judgments (A2.2)."""
+    from comms.attest import Attestation, body_status
+    v = attest_vectors["vectors"][3]
+    n = _a2_negative(attest_vectors, "mismatched detached body")
+    core = wire_core(v["core"])
+    att = Attestation(claim=core["c"], frame=core["f"], refs=core["r"],
+                      signatures=[full_sig(s) for s in v["signatures"]])
+    ok, why = att.verified()
+    assert ok, why
+    wrong = n["wrong_body_utf8"].encode("utf-8")
+    assert body_status(att.claim["content"], wrong) == "mismatched"

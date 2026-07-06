@@ -135,6 +135,40 @@ fn attest_output(comms_dir: &Path, rite: &Rite, target: &str) -> PathBuf {
     comms_dir.join("store").join(name)
 }
 
+/// The newest prior attestation of `target` already in the store (any prior
+/// session), judged by frame `issued_at` — the link an entry attestation
+/// records as its `previous-entry` ref. `exclude` is the current session's
+/// own output path. None when this is the first of its kind.
+fn previous_attestation_id(comms_dir: &Path, target: &str, exclude: &Path) -> Option<String> {
+    let store = comms_dir.join("store");
+    let prefix = format!("{target}.");
+    let mut best: Option<(String, String)> = None; // (issued_at, id)
+    for entry in std::fs::read_dir(&store).ok()?.flatten() {
+        let p = entry.path();
+        if p == exclude {
+            continue;
+        }
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
+        if !name.ends_with(".cbor") || !(name.starts_with(&prefix) || name == format!("{target}.cbor")) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&p) else { continue };
+        let Ok(att) = parse_attestation(&bytes) else { continue };
+        let issued = att
+            .core
+            .get("f")
+            .and_then(|f| f.get("issued_at"))
+            .and_then(crate::cbor::Value::as_text)
+            .unwrap_or("")
+            .to_owned();
+        let id = att.id();
+        if best.as_ref().map(|(t, _)| issued > *t).unwrap_or(true) {
+            best = Some((issued, id));
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
 /// Where a `seal`/`pack` step writes its bundle. Scoped by session tag for the
 /// same reason as attest outputs: otherwise the first session's bundle persists
 /// and every later session's `seal` reads as already-done and is skipped, so
@@ -249,6 +283,8 @@ pub fn record_waiver(
         body,
         media_type: "text/markdown",
         support: &[],
+        detach: false,
+        refs: &[],
         language: "zxx",
         community: None,
         occasion: Some("waiver"),
@@ -412,6 +448,11 @@ pub struct ExecInputs<'a> {
     pub key: Option<PathBuf>,
     /// `grant` | `decline` | `defer` for a `grant` step (default `grant`).
     pub decision: Option<&'a str>,
+    /// What a `grant` decision delivers (detached-bodies design II.6): an
+    /// attestation id whose detached body should be served from the archive,
+    /// or a bare 64-hex blake3. The bytes are copied to the grants path and
+    /// the grant attestation names the delivery.
+    pub deliver: Option<&'a str>,
 }
 
 /// Result of performing one step.
@@ -524,12 +565,25 @@ pub fn execute_step(
             let sk = session_signer(comms_dir, rite)?;
             let target = step.target.as_deref().unwrap_or("entry");
             let about = inputs.about.unwrap_or(target);
+            let out = attest_output(comms_dir, rite, target);
+            // An entry chains to its predecessor: the newest prior entry in the
+            // store becomes a "previous-entry" ref, same as the retired Python
+            // ceremony recorded. First entry ever has none.
+            let refs: Vec<(String, String)> = if target == "entry" {
+                previous_attestation_id(comms_dir, target, &out)
+                    .map(|id| vec![("previous-entry".to_owned(), id)])
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let spec = ClaimSpec {
                 about,
                 kind: inputs.kind.unwrap_or("testimony"),
                 body,
                 media_type: inputs.media_type.unwrap_or("text/markdown"),
+                detach: false,
                 support: &[],
+                refs: &refs,
                 language: "zxx",
                 community: None,
                 occasion: Some(&rite.name),
@@ -538,7 +592,6 @@ pub fn execute_step(
             let att = author_general_claim(&spec, &sk, "author", &now);
             let store = comms_dir.join("store");
             std::fs::create_dir_all(&store).map_err(|e| format!("{}: {e}", store.display()))?;
-            let out = attest_output(comms_dir, rite, target);
             std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(ExecOutcome {
                 message: format!("attested {} -> {}", att.id(), out.display()),
@@ -686,6 +739,8 @@ pub fn execute_step(
                 body,
                 media_type: inputs.media_type.unwrap_or("text/markdown"),
                 support: &[],
+                detach: false,
+                refs: &[],
                 language: "zxx",
                 community: None,
                 occasion: Some(&rite.name),
@@ -725,16 +780,36 @@ pub fn execute_step(
                 .map_err(|e| format!("{}: {e}", request_path.display()))?
                 .id();
 
-            let default_body = format!("{decision}ed");
-            let body = inputs.body.as_deref().unwrap_or(default_body.as_bytes());
+            // Grant is delivery (detached-bodies design II.6): with
+            // --deliver, the requested body is resolved from the archive and
+            // placed where the requester can reach it, and the attestation
+            // below names the delivery — the record of the grant and the
+            // fact of the grant become the same thing.
+            let mut delivery_note = String::new();
+            if decision == "grant" {
+                if let Some(target_ref) = inputs.deliver {
+                    delivery_note = deliver_body(comms_dir, target_ref, &request_id)?;
+                }
+            } else if inputs.deliver.is_some() {
+                return Err(format!(
+                    "--deliver only accompanies a grant; a {decision} delivers nothing \
+                     and is a first-class record on its own"
+                ));
+            }
+
+            let mut body: Vec<u8> =
+                inputs.body.clone().unwrap_or_else(|| format!("{decision}ed").into_bytes());
+            body.extend_from_slice(delivery_note.as_bytes());
             let kind = format!("archive-{decision}");
             let support = [request_id.clone()];
             let spec = ClaimSpec {
                 about: inputs.about.unwrap_or(target),
                 kind: &kind,
-                body,
+                body: &body,
                 media_type: inputs.media_type.unwrap_or("text/markdown"),
                 support: &support,
+                detach: false,
+                refs: &[],
                 language: "zxx",
                 community: None,
                 occasion: Some(&rite.name),
@@ -745,9 +820,10 @@ pub fn execute_step(
             std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(ExecOutcome {
                 message: format!(
-                    "recorded {decision} {} (re {request_id}) -> {}",
+                    "recorded {decision} {} (re {request_id}) -> {}{}",
                     att.id(),
-                    out.display()
+                    out.display(),
+                    delivery_note.trim_end(),
                 ),
                 output: Some(out),
                 secret: None,
@@ -755,6 +831,125 @@ pub fn execute_step(
         }
         other => Err(format!("unknown rite verb '{other}' (step '{}')", step.display())),
     }
+}
+
+/// Resolve `--deliver <ref>` and copy the body to the grants path. `target_ref`
+/// is an attestation id (its detached commitment names the bytes) or a bare
+/// 64-hex blake3. Returns the note the grant attestation carries, so the
+/// record names exactly what was delivered where.
+fn deliver_body(comms_dir: &Path, target_ref: &str, request_id: &str) -> Result<String, String> {
+    let cfg = config::load(comms_dir)?;
+    let repo_root = comms_dir.parent().unwrap_or(Path::new("."));
+    let archive_rel = cfg.archive_path.as_deref().ok_or_else(|| {
+        "no [archive] path in comms.toml — delivery needs to know where the archive lives"
+            .to_owned()
+    })?;
+    let archive_root = if Path::new(archive_rel).is_absolute() {
+        PathBuf::from(archive_rel)
+    } else {
+        repo_root.join(archive_rel)
+    };
+    let archive = crate::archive::Archive::at(&archive_root);
+
+    // Resolve the commitment: a bare hash names bytes directly; an
+    // attestation id names them through its detached content.
+    let (b3_hex, view_name) = if target_ref.len() == 64
+        && target_ref.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        (target_ref.to_ascii_lowercase(), None)
+    } else if target_ref.starts_with("comms.attest:") {
+        let att = find_attestation(&[&archive.store(), &comms_dir.join("store")], target_ref)?
+            .ok_or_else(|| {
+                format!("{target_ref} not found in the archive store or this repo's store")
+            })?;
+        let content = att
+            .core
+            .get("c")
+            .and_then(|c| c.get("content"))
+            .ok_or_else(|| format!("{target_ref} is not a general-claim with content"))?;
+        let b3 = content
+            .get("body_b3")
+            .and_then(crate::cbor::Value::as_bytes)
+            .ok_or_else(|| {
+                format!(
+                    "{target_ref} embeds its body — nothing to deliver from the archive \
+                     (the bytes already travel with the attestation)"
+                )
+            })?;
+        let about = att
+            .core
+            .get("c")
+            .and_then(|c| c.get("about"))
+            .and_then(crate::cbor::Value::as_text)
+            .unwrap_or("body");
+        let mt = content
+            .get("media_type")
+            .and_then(crate::cbor::Value::as_text)
+            .unwrap_or("");
+        (
+            crate::archive::hex(b3),
+            Some(format!("{}{}", about.replace('/', "-"), crate::archive::ext_for(mt))),
+        )
+    } else {
+        return Err(format!(
+            "--deliver takes an attestation id (comms.attest:z...) or a 64-hex blake3 \
+             (got '{target_ref}')"
+        ));
+    };
+
+    let src = archive.body_file(&b3_hex).ok_or_else(|| {
+        format!(
+            "body blake3 {b3_hex} is not in archive custody under {} — intake it first",
+            archive.bodies().display()
+        )
+    })?;
+
+    let grants_root = PathBuf::from(cfg.grants_path.as_deref().unwrap_or("/world/in/grants"));
+    let req_tag: String = request_id
+        .strip_prefix("comms.attest:")
+        .unwrap_or(request_id)
+        .chars()
+        .take(16)
+        .collect();
+    let dst_dir = grants_root.join(req_tag);
+    std::fs::create_dir_all(&dst_dir).map_err(|e| format!("{}: {e}", dst_dir.display()))?;
+    let file_name = view_name.unwrap_or_else(|| {
+        src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(b3_hex.clone())
+    });
+    let dst = dst_dir.join(&file_name);
+    std::fs::copy(&src, &dst).map_err(|e| format!("copy {} -> {}: {e}", src.display(), dst.display()))?;
+    // The requester verifies the received bytes against the attested
+    // commitment before relying on them; the note gives them the hash to
+    // check against and the record a path to audit.
+    Ok(format!("\n\ndelivered: {} (blake3 {b3_hex})\n", dst.display()))
+}
+
+/// Find an attestation by id across candidate stores (filename `<id>.cbor`
+/// first, then a parse-and-compare sweep for stores using other names).
+fn find_attestation(
+    stores: &[&PathBuf],
+    id: &str,
+) -> Result<Option<crate::steward::Attestation>, String> {
+    for store in stores {
+        let direct = store.join(format!("{id}.cbor"));
+        if direct.is_file() {
+            let bytes = std::fs::read(&direct).map_err(|e| format!("{}: {e}", direct.display()))?;
+            return parse_attestation(&bytes).map(Some).map_err(|e| format!("{}: {e}", direct.display()));
+        }
+        let Ok(entries) = std::fs::read_dir(store) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().map(|x| x != "cbor").unwrap_or(true) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&p) else { continue };
+            let Ok(att) = parse_attestation(&bytes) else { continue };
+            if att.id() == id {
+                return Ok(Some(att));
+            }
+        }
+    }
+    Ok(None)
 }
 
 // ---- tests -----------------------------------------------------------------
@@ -862,6 +1057,33 @@ steps = ["attest transcript", "seal store", "shred session"]
             .filter(|n| n.starts_with("entry.") && n.ends_with(".cbor"))
             .collect();
         assert_eq!(entries.len(), 2, "second session must not overwrite the first: {entries:?}");
+    }
+
+    #[test]
+    fn entry_attestation_refs_previous_entry() {
+        let comms = scratch("preventry");
+        let cfg = cfg();
+        let open = cfg.rite("open").unwrap();
+        let close = cfg.rite("close").unwrap();
+        let body = || ExecInputs { body: Some(b"e\n".to_vec()), ..Default::default() };
+
+        // Session A: first entry ever — no previous-entry ref.
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        execute_step(&comms, open, &open.steps[1], &body()).unwrap();
+        let a_path = step_output(&comms, open, &open.steps[1]).unwrap();
+        let a = parse_attestation(&std::fs::read(&a_path).unwrap()).unwrap();
+        assert!(a.core.get("r").and_then(crate::cbor::Value::as_array).unwrap().is_empty());
+        execute_step(&comms, close, &close.steps[2], &ExecInputs::default()).unwrap(); // shred
+
+        // Session B: its entry must ref session A's entry as previous-entry.
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        execute_step(&comms, open, &open.steps[1], &body()).unwrap();
+        let b_path = step_output(&comms, open, &open.steps[1]).unwrap();
+        let b = parse_attestation(&std::fs::read(&b_path).unwrap()).unwrap();
+        let refs = b.core.get("r").and_then(crate::cbor::Value::as_array).unwrap();
+        assert_eq!(refs.len(), 1, "second entry should carry exactly one ref");
+        assert_eq!(refs[0].get("role").and_then(crate::cbor::Value::as_text), Some("previous-entry"));
+        assert_eq!(refs[0].get("id").and_then(crate::cbor::Value::as_text), Some(a.id().as_str()));
     }
 
     #[test]

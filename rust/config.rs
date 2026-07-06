@@ -229,6 +229,12 @@ pub struct CountersignCfg {
 pub struct HarnessConfig {
     pub profile: String,
     pub archive_mode: Option<String>,
+    /// `[archive] path`: where the external archive lives, relative to the
+    /// repo root (the parent of `.comms/`). Used to resolve grant deliveries.
+    pub archive_path: Option<String>,
+    /// `[archive] grants`: where granted bodies are delivered
+    /// (detached-bodies design II.6). Defaults to `/world/in/grants`.
+    pub grants_path: Option<String>,
     /// How the session seed is held: `"file"` (default — written to
     /// `<comms>/session.key`, destroyed at shred) or `"ephemeral"` (never
     /// written; shown once at mint and supplied back by the holder through
@@ -248,6 +254,14 @@ impl HarnessConfig {
             .to_owned();
         let archive_mode = toml
             .get("archive", "mode")
+            .and_then(TomlValue::as_str)
+            .map(str::to_owned);
+        let archive_path = toml
+            .get("archive", "path")
+            .and_then(TomlValue::as_str)
+            .map(str::to_owned);
+        let grants_path = toml
+            .get("archive", "grants")
             .and_then(TomlValue::as_str)
             .map(str::to_owned);
         let session_key = toml
@@ -313,7 +327,16 @@ impl HarnessConfig {
                     .map(str::to_owned),
             });
 
-        HarnessConfig { profile, archive_mode, session_key, rites, artifact_types, countersign }
+        HarnessConfig {
+            profile,
+            archive_mode,
+            archive_path,
+            grants_path,
+            session_key,
+            rites,
+            artifact_types,
+            countersign,
+        }
     }
 
     pub fn rite(&self, name: &str) -> Option<&Rite> {

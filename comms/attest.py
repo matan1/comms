@@ -56,6 +56,56 @@ def sig_payload(core: dict, *, by: str, alg: str, role: str,
     })
 
 
+def _content_well_formed(content) -> tuple[bool, str]:
+    """A2.1 layer-1 shape of a general-claim/1 content map: exactly one of
+    body/body_b3; detached requires body_len; embedded must not carry it."""
+    if not isinstance(content, dict):
+        return False, "general-claim carries no content map"
+    has_body = "body" in content
+    has_b3 = "body_b3" in content
+    if has_body and has_b3:
+        return False, "content carries both body and body_b3 (A2.1)"
+    if not has_body and not has_b3:
+        return False, "content carries neither body nor body_b3 (A2.1)"
+    if has_b3:
+        b3, length = content["body_b3"], content.get("body_len")
+        if not isinstance(b3, bytes) or len(b3) != 32:
+            return False, "body_b3 is not 32 bytes (A2.1)"
+        if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+            return False, "detached content requires body_len (A2.1)"
+    else:
+        if not isinstance(content["body"], bytes):
+            return False, "body is not a byte string (A1.6)"
+        if "body_len" in content:
+            return False, "embedded content must not carry body_len (A2.1)"
+    return True, "ok"
+
+
+def body_status(content: dict, data: bytes | None = None) -> str:
+    """A2.2 body status — a judgment separate from attestation validity:
+
+    - "verified":   bytes at hand honor the commitment (an embedded body is
+                    trivially verified — the bytes are the commitment)
+    - "absent":     detached and no bytes at hand; the normal state for
+                    anything host-gated, never an error
+    - "mismatched": bytes at hand under the body's name, but hash or length
+                    differs; per the preservation stance such bytes are
+                    retained and reported, never deleted or silently repaired
+
+    Callers must not fold "absent"/"mismatched" into signature failure.
+    """
+    from .canonical import blake3_hash
+
+    if "body" in content:
+        return "verified"
+    if data is None:
+        return "absent"
+    if blake3_hash(data) == content.get("body_b3") \
+            and len(data) == content.get("body_len"):
+        return "verified"
+    return "mismatched"
+
+
 @dataclass
 class Attestation:
     claim: dict
@@ -149,6 +199,10 @@ class Attestation:
             return False, "bad envelope type"
         if not isinstance(self.claim, dict) or "t" not in self.claim:
             return False, "claim missing type"
+        if self.claim.get("t") == "general-claim/1":
+            ok, why = _content_well_formed(self.claim.get("content"))
+            if not ok:
+                return False, why
         if "issued_at" not in self.frame or "language" not in self.frame:
             return False, "frame missing required fields"
         if not _TIMESTAMP_RE.match(self.frame["issued_at"]):

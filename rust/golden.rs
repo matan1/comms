@@ -606,6 +606,8 @@ fn author_general_claim_reproduces_the_reference_vector() {
         body: &body,
         media_type: content.get("media_type").and_then(Value::as_text).unwrap(),
         support: &[],
+        detach: false,
+        refs: &[],
         language: frame.get("language").and_then(Value::as_text).unwrap(),
         community: None,
         occasion: None,
@@ -628,4 +630,134 @@ fn author_general_claim_reproduces_the_reference_vector() {
         sig["signature_hex"].as_str().unwrap(),
         "deterministic author signature must match the reference"
     );
+}
+
+/// A2: `attest --detach` (ClaimSpec { detach: true }) must reproduce the
+/// Python-generated detached vector byte-for-byte from the body bytes alone —
+/// same commitment, same core, same id, same deterministic signature.
+#[test]
+fn author_detached_claim_reproduces_the_a2_vector() {
+    let j: serde_json::Value = serde_json::from_str(ATTEST_VECTORS).unwrap();
+    let v = &j["vectors"][3];
+    assert!(v["name"].as_str().unwrap().contains("detached"), "vector 4 must be the A2 vector");
+
+    let original = hex::decode(v["canonical_core_cbor_hex"].as_str().unwrap()).unwrap();
+    let core = cbor::decode(&original).unwrap();
+    assert_eq!(cbor::encode(&core), original, "deterministic CBOR agreement");
+    let claim = core.get("c").unwrap();
+    let content = claim.get("content").unwrap();
+    let frame = core.get("f").unwrap();
+
+    // The published body reproduces the published commitment...
+    let body = v["body_utf8"].as_str().unwrap().as_bytes().to_vec();
+    assert_eq!(
+        hex::encode(blake3::hash(&body).as_bytes()),
+        v["body_b3_hex"].as_str().unwrap()
+    );
+    // ...and the wire core carries hash + length, never the bytes.
+    assert!(content.get("body").is_none());
+    assert_eq!(
+        content.get("body_b3").and_then(Value::as_bytes).unwrap(),
+        hex::decode(v["body_b3_hex"].as_str().unwrap()).unwrap().as_slice()
+    );
+    assert_eq!(
+        content.get("body_len").and_then(Value::as_u64).unwrap(),
+        v["body_len"].as_u64().unwrap()
+    );
+
+    let spec = ClaimSpec {
+        about: claim.get("about").and_then(Value::as_text).unwrap(),
+        kind: claim.get("kind").and_then(Value::as_text).unwrap(),
+        body: &body,
+        media_type: content.get("media_type").and_then(Value::as_text).unwrap(),
+        support: &[],
+        detach: true,
+        refs: &[],
+        language: frame.get("language").and_then(Value::as_text).unwrap(),
+        community: None,
+        occasion: None,
+        issued_at: frame.get("issued_at").and_then(Value::as_text).unwrap(),
+    };
+    let sig = &v["signatures"][0];
+    let sk = SigningKey::from_bytes(&hex32(&"01".repeat(32)));
+    let att = author_general_claim(&spec, &sk, sig["role"].as_str().unwrap(), sig["signed_at"].as_str().unwrap());
+
+    assert_eq!(
+        hex::encode(cbor::encode(&att.core)),
+        v["canonical_core_cbor_hex"].as_str().unwrap(),
+        "authored detached core must match the reference bytes"
+    );
+    assert_eq!(att.id(), v["attestation_id"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(&att.signatures[0].signature),
+        sig["signature_hex"].as_str().unwrap()
+    );
+}
+
+/// A2 negatives: both-forms and neither-form content maps are layer-1
+/// malformed; a wrong body is `mismatched` while the claim stays valid.
+#[test]
+fn a2_body_status_and_negative_vectors() {
+    use comms_core::bundle::{content_report, BodyStatus, ContentReport};
+
+    let j: serde_json::Value = serde_json::from_str(ATTEST_VECTORS).unwrap();
+    let v = &j["vectors"][3];
+    let core = cbor::decode(&hex::decode(v["canonical_core_cbor_hex"].as_str().unwrap()).unwrap()).unwrap();
+    let att = Attestation { core, signatures: Vec::new() };
+
+    // No bytes at hand: absent — the normal host-gated state, not an error.
+    let empty = HashMap::new();
+    let ContentReport::Detached { status, body_len, .. } = content_report(&att, &empty) else {
+        panic!("vector 4 must judge as detached");
+    };
+    assert_eq!(status, BodyStatus::Absent);
+    assert_eq!(body_len, v["body_len"].as_u64().unwrap());
+
+    // Right bytes under their content key: verified.
+    let body = v["body_utf8"].as_str().unwrap().as_bytes().to_vec();
+    let mut bodies = HashMap::new();
+    bodies.insert(media_key(&body), body.clone());
+    let ContentReport::Detached { status, .. } = content_report(&att, &bodies) else {
+        panic!("detached");
+    };
+    assert_eq!(status, BodyStatus::Verified);
+
+    // Wrong bytes squatting under the committed key: mismatched, loudly —
+    // and per the preservation stance the report never removes them.
+    let neg = j["negative_vectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"].as_str().unwrap().contains("mismatched"))
+        .unwrap();
+    let wrong = neg["wrong_body_utf8"].as_str().unwrap().as_bytes().to_vec();
+    let committed_key = format!(
+        "z{}",
+        bs58::encode(hex::decode(v["body_b3_hex"].as_str().unwrap()).unwrap()).into_string()
+    );
+    let mut squat = HashMap::new();
+    squat.insert(committed_key, wrong);
+    let ContentReport::Detached { status, .. } = content_report(&att, &squat) else {
+        panic!("detached");
+    };
+    assert_eq!(status, BodyStatus::Mismatched);
+
+    // Layer-1 negatives: both forms / neither form.
+    for (needle, why_part) in [
+        ("both body and body_b3", "both"),
+        ("neither body nor body_b3", "neither"),
+    ] {
+        let n = j["negative_vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"].as_str().unwrap().contains(needle))
+            .unwrap();
+        let core = cbor::decode(&hex::decode(n["canonical_core_cbor_hex"].as_str().unwrap()).unwrap()).unwrap();
+        let att = Attestation { core, signatures: Vec::new() };
+        let ContentReport::Malformed(why) = content_report(&att, &empty) else {
+            panic!("negative '{needle}' must be judged malformed");
+        };
+        assert!(why.contains(why_part), "{why}");
+    }
 }

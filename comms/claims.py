@@ -16,9 +16,11 @@ from __future__ import annotations
 
 # ---- the general-purpose primitive ----
 
-def general_claim(*, about: str, kind: str, body: bytes | str,
+def general_claim(*, about: str, kind: str, body: bytes | str | None = None,
                   media_type: str = "text/plain;charset=utf-8",
-                  support: list[str] | None = None) -> dict:
+                  support: list[str] | None = None,
+                  body_b3: bytes | None = None,
+                  body_len: int | None = None) -> dict:
     """A statement about something: observation, testimony, synthesis, etc.
 
     kind: "observation" | "synthesis" | "prediction" | "testimony" |
@@ -26,14 +28,32 @@ def general_claim(*, about: str, kind: str, body: bytes | str,
 
     Per A1.6 the body is always carried as bytes on the wire regardless of
     media type, so one logical content has exactly one canonical encoding.
+
+    Per A2.1 the content may instead be *detached*: pass `body_b3` (the plain
+    blake3-256 of the body bytes — no domain separation; it names a file, not
+    an attestation core) and `body_len`, and the claim commits to the body
+    without carrying it. Exactly one of body/body_b3 must be given.
     """
-    if isinstance(body, str):
-        body = body.encode("utf-8")
+    if (body is None) == (body_b3 is None):
+        raise ValueError("exactly one of body / body_b3 (A2.1)")
+    if body_b3 is not None:
+        if len(body_b3) != 32:
+            raise ValueError("body_b3 must be 32 bytes (blake3-256)")
+        if body_len is None or body_len < 0:
+            raise ValueError("detached content requires body_len (A2.1)")
+        content = {"media_type": media_type, "body_b3": body_b3,
+                   "body_len": body_len}
+    else:
+        if body_len is not None:
+            raise ValueError("embedded content must not carry body_len (A2.1)")
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        content = {"media_type": media_type, "body": body}
     return {
         "t": "general-claim/1",
         "about": about,
         "kind": kind,
-        "content": {"media_type": media_type, "body": body},
+        "content": content,
         "support": support or [],
     }
 

@@ -367,6 +367,99 @@ pub struct RefReport {
     pub resolves_in_bundle: bool,
 }
 
+/// A2.2 body status: a judgment separate from attestation validity, never
+/// folded into signature failure. `Absent` is the normal state for anything
+/// host-gated; `Mismatched` bytes are retained and reported, never deleted
+/// (the preservation stance).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyStatus {
+    Verified,
+    Absent,
+    Mismatched,
+}
+
+impl BodyStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BodyStatus::Verified => "verified",
+            BodyStatus::Absent => "absent",
+            BodyStatus::Mismatched => "mismatched",
+        }
+    }
+}
+
+/// What a `general-claim/1` member's content map carries, and — for a
+/// detached body — whether the bytes at hand honor the commitment.
+#[derive(Debug, Clone)]
+pub enum ContentReport {
+    /// Not a general-claim, or no content map to judge.
+    None,
+    /// Embedded body (A1.6): the bytes are the commitment; trivially verified.
+    Embedded { len: usize },
+    /// Detached body (A2.1): commitment carried, bytes judged separately.
+    Detached { body_b3: [u8; 32], body_len: u64, status: BodyStatus },
+    /// Layer-1 structural failure: both or neither of body/body_b3, missing
+    /// body_len, wrong hash size. Distinct from Mismatched, which is a valid
+    /// claim whose bytes have drifted.
+    Malformed(String),
+}
+
+/// Judge a member's content per A2.1/A2.2 against whatever bytes are at hand.
+/// `bodies` is a lookup from media key (`z<base58(blake3)>`) to blob — a
+/// bundle's media map, or any other content-addressed source.
+pub fn content_report(att: &Attestation, bodies: &HashMap<String, Vec<u8>>) -> ContentReport {
+    let Some(claim) = att.core.get("c") else { return ContentReport::None };
+    if claim.get("t").and_then(Value::as_text) != Some("general-claim/1") {
+        return ContentReport::None;
+    }
+    let Some(content) = claim.get("content") else {
+        return ContentReport::Malformed("general-claim carries no content map".to_owned());
+    };
+    let body = content.get("body");
+    let body_b3 = content.get("body_b3");
+    match (body, body_b3) {
+        (Some(_), Some(_)) => {
+            ContentReport::Malformed("content carries both body and body_b3 (A2.1)".to_owned())
+        }
+        (None, None) => {
+            ContentReport::Malformed("content carries neither body nor body_b3 (A2.1)".to_owned())
+        }
+        (Some(b), None) => {
+            let Some(bytes) = b.as_bytes() else {
+                return ContentReport::Malformed("body is not a byte string (A1.6)".to_owned());
+            };
+            if content.get("body_len").is_some() {
+                return ContentReport::Malformed(
+                    "embedded content must not carry body_len (A2.1)".to_owned(),
+                );
+            }
+            ContentReport::Embedded { len: bytes.len() }
+        }
+        (None, Some(h)) => {
+            let Some(hash) = h.as_bytes().and_then(|b| <[u8; 32]>::try_from(b).ok()) else {
+                return ContentReport::Malformed("body_b3 is not 32 bytes (A2.1)".to_owned());
+            };
+            let Some(len) = content.get("body_len").and_then(Value::as_u64) else {
+                return ContentReport::Malformed(
+                    "detached content requires body_len (A2.1)".to_owned(),
+                );
+            };
+            let key = format!("z{}", bs58::encode(hash).into_string());
+            let status = match bodies.get(&key) {
+                None => BodyStatus::Absent,
+                Some(blob) => {
+                    if blake3::hash(blob).as_bytes() == &hash && blob.len() as u64 == len {
+                        BodyStatus::Verified
+                    } else {
+                        BodyStatus::Mismatched
+                    }
+                }
+            };
+            ContentReport::Detached { body_b3: hash, body_len: len, status }
+        }
+    }
+}
+
 /// Per-member verification result.
 #[derive(Debug)]
 pub struct MemberReport {
@@ -377,6 +470,8 @@ pub struct MemberReport {
     /// True iff the member carries at least one signature and all verify.
     pub all_signatures_ok: bool,
     pub refs: Vec<RefReport>,
+    /// A2.2 content/body judgment, separate from the signature results above.
+    pub content: ContentReport,
 }
 
 /// Whole-bundle inspection: every member verified on its own terms, media
@@ -458,6 +553,7 @@ pub fn inspect_bundle(bundle: &Bundle) -> InspectReport {
 
         members.push(MemberReport {
             is_seal: seal_ids.contains(&id),
+            content: content_report(att, &bundle.media),
             id,
             claim_type,
             signatures,
@@ -599,8 +695,14 @@ pub struct ClaimSpec<'a> {
     pub body: &'a [u8],
     /// Per A1.6 the body travels as bytes regardless of media type.
     pub media_type: &'a str,
+    /// A2.1: detach the body — the claim commits to `{body_b3, body_len}`
+    /// computed from `body`, and the bytes themselves stay out of the wire.
+    pub detach: bool,
     /// Claim-level supporting attestation ids (the `support` list).
     pub support: &'a [String],
+    /// Envelope-level references (`r`), as (role, attestation id) pairs —
+    /// e.g. `("previous-entry", ...)` chaining session entries.
+    pub refs: &'a [(String, String)],
     pub language: &'a str,
     pub community: Option<&'a str>,
     pub occasion: Option<&'a str>,
@@ -619,17 +721,29 @@ pub fn author_general_claim(
     role: &str,
     signed_at: &str,
 ) -> Attestation {
+    // A2.1: exactly one of body / body_b3. Detached content commits to the
+    // plain blake3 of the bytes (no domain separation — it names a file, the
+    // same way media blobs are keyed), plus the length.
+    let content = if spec.detach {
+        Value::Map(vec![
+            (Value::text("media_type"), Value::text(spec.media_type)),
+            (
+                Value::text("body_b3"),
+                Value::Bytes(blake3::hash(spec.body).as_bytes().to_vec()),
+            ),
+            (Value::text("body_len"), Value::U64(spec.body.len() as u64)),
+        ])
+    } else {
+        Value::Map(vec![
+            (Value::text("media_type"), Value::text(spec.media_type)),
+            (Value::text("body"), Value::Bytes(spec.body.to_vec())),
+        ])
+    };
     let claim = Value::Map(vec![
         (Value::text("t"), Value::text("general-claim/1")),
         (Value::text("about"), Value::text(spec.about)),
         (Value::text("kind"), Value::text(spec.kind)),
-        (
-            Value::text("content"),
-            Value::Map(vec![
-                (Value::text("media_type"), Value::text(spec.media_type)),
-                (Value::text("body"), Value::Bytes(spec.body.to_vec())),
-            ]),
-        ),
+        (Value::text("content"), content),
         (
             Value::text("support"),
             Value::Array(spec.support.iter().map(|s| Value::text(s)).collect()),
@@ -647,12 +761,23 @@ pub fn author_general_claim(
         frame.push((Value::text("occasion"), Value::text(o)));
     }
 
+    let refs = spec
+        .refs
+        .iter()
+        .map(|(role, id)| {
+            Value::Map(vec![
+                (Value::text("role"), Value::text(role)),
+                (Value::text("id"), Value::text(id)),
+            ])
+        })
+        .collect();
+
     let core = Value::Map(vec![
         (Value::text("v"), Value::U64(1)),
         (Value::text("t"), Value::text("comms.attestation/1")),
         (Value::text("c"), claim),
         (Value::text("f"), Value::Map(frame)),
-        (Value::text("r"), Value::Array(Vec::new())),
+        (Value::text("r"), Value::Array(refs)),
     ]);
 
     let by = personal_steward_id(sk.verifying_key().as_bytes());

@@ -10,8 +10,9 @@ use std::io::Read;
 use std::process;
 
 use comms_core::bundle::{
-    author_general_claim, build_seal, inspect_bundle, make_bundle, media_key, parse_attestation,
-    parse_bundle, verify_seal, Bundle, ClaimSpec, InspectReport,
+    author_general_claim, build_seal, content_report, inspect_bundle, make_bundle, media_key,
+    parse_attestation, parse_bundle, verify_seal, BodyStatus, Bundle, ClaimSpec, ContentReport,
+    InspectReport,
 };
 use comms_core::config::{self, HarnessConfig};
 use comms_core::init::{install, profile_by_name, profile_names};
@@ -52,6 +53,8 @@ fn main() {
         Some("seal") => cmd_seal(&argv[1..]),
         Some("pack") => cmd_pack(&argv[1..]),
         Some("extract") => cmd_extract(&argv[1..]),
+        Some("intake") => cmd_intake(&argv[1..]),
+        Some("audit") => cmd_audit(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
         Some("waive") => cmd_waive(&argv[1..]),
         Some("sign") => cmd_sign(&argv[1..]),
@@ -74,9 +77,10 @@ fn usage_text() -> String {
          \n\
          commands:\n\
          \x20 init    [dir] [--profile P] [--dry-run] [--force]  install the .comms/ door\n\
-         \x20 attest  --key <k> --about S --kind S --body <file|-> [--media-type T]\n\
-         \x20         [--language L] [--community C] [--occasion O] [--role R]\n\
-         \x20         [--support ID]... [--out FILE]   author + sign a general-claim/1\n\
+         \x20 attest  --key <k> --about S --kind S --body <file|-> [--detach]\n\
+         \x20         [--media-type T] [--language L] [--community C] [--occasion O]\n\
+         \x20         [--role R] [--support ID]... [--out FILE]   author + sign a\n\
+         \x20         general-claim/1 (--detach commits to the body without carrying it)\n\
          \x20 status  [dir] [--json]           where you are in the rite + next step\n\
          \x20 next    [dir] [--rite N] [--body F] [--about S]   perform the next step\n\
          \x20 verify  <bundle>                 check the A1.8 integrity seal (default)\n\
@@ -84,6 +88,11 @@ fn usage_text() -> String {
          \x20 seal    <bundle> --key <k> [--out <p>] [--description S] [--*-at T]\n\
          \x20 pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]\n\
          \x20 extract <bundle> --out <dir>     write members and media to files\n\
+         \x20 intake  <bundle|dir> [root] --key <k> [--legacy --provenance S]\n\
+         \x20         archive custody: verify, ingest by id/hash, regenerate views,\n\
+         \x20         attest custody (idempotent; archive profile)\n\
+         \x20 audit   [root]                   re-derive every id and hash in custody;\n\
+         \x20         mark drift, never delete (archive profile)\n\
          \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
          \x20 waive   <type> [dir] --body <reason>   record that this session cannot\n\
          \x20         produce a required artifact (the gap becomes an attestation)\n\
@@ -105,14 +114,16 @@ fn usage_text() -> String {
 fn help_for(cmd: &str) -> String {
     let synopsis = match cmd {
         "init" => "comms init [dir] [--profile default|continuity] [--dry-run] [--force]\n  Install or refresh the .comms/ harness door in a repo.\n",
-        "attest" => "comms attest --key <k.json> --about S --kind S --body <file|-> \\\n    [--media-type T] [--language L] [--community C] [--occasion O] [--role R] \\\n    [--support ID]... [--out FILE]\n  Author and sign a general-claim/1 from a content file (-> <id>.cbor).\n",
+        "attest" => "comms attest --key <k.json> --about S --kind S --body <file|-> [--detach] \\\n    [--media-type T] [--language L] [--community C] [--occasion O] [--role R] \\\n    [--support ID]... [--out FILE]\n  Author and sign a general-claim/1 from a content file (-> <id>.cbor).\n  --detach (A2): the claim commits to {body_b3, body_len} and the body bytes\n  stay out of the attestation — pair them back up in a bundle via pack --media.\n",
+        "inspect" => "comms inspect <bundle> [--json]\n  Verify every member on its own terms (signatures, refs, media), and report\n  body status (verified | absent | mismatched) for detached bodies (A2.2).\n",
         "status" => "comms status [dir] [--json]\n  Report where you are in each rite and the exact next command.\n",
         "next" => "comms next [dir] [--rite N] [--body F] [--about S] [--kind K]\n  Perform the next pending step of a rite. attest steps need --body;\n  with no --rite, advances the rite you are currently in.\n",
         "verify" => "comms verify <bundle>\n  Check the A1.8 integrity seal (also the default for a bare bundle path).\n",
-        "inspect" => "comms inspect <bundle> [--json]\n  Verify every member on its own terms (signatures, refs, media).\n",
         "seal" => "comms seal <bundle> --key <k.json> [--out P] [--description S] [--created-at T] [--issued-at T] [--signed-at T]\n  Add an A1.8 integrity seal (signs the exact member set).\n",
         "pack" => "comms pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
         "extract" => "comms extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
+        "intake" => "comms intake <bundle|file|dir> [archive-root] --key <custodian key> \\\n    [--legacy --provenance \"...\"]\n  The custodian's one verb at closeout (archive profile): verify the bundle's\n  seal/members/media, ingest members by id and bodies by hash (idempotent),\n  regenerate views/ for the affected sessions, and attest custody. --legacy\n  takes unattested material in as testimony, by hash, honestly labeled.\n",
+        "audit" => "comms audit [archive-root]\n  Walk store/ and bodies/, re-derive every id and hash, and report intact /\n  absent / mismatched. Drift is marked, never deleted (preservation stance).\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
         "waive" => "comms waive <type> [dir] --body <reason file|->\n  Record a session-signed waiver: this session cannot produce a declared\n  `required_for` artifact, and says so on the record instead of being blocked.\n  Only rites with `allow_waivers = true` accept it at seal.\n",
         "sign" => "comms sign --key <path> [--pending DIR]\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. Needs naming other keys are left\n  standing. Default DIR: .comms/pending or continuity/pending, whichever has\n  staged items.\n",
@@ -150,7 +161,8 @@ struct Opts {
 }
 
 fn parse_opts(args: &[String]) -> Opts {
-    const BOOLS: &[&str] = &["--seal", "--json", "--dry-run", "--force", "-h", "--help"];
+    const BOOLS: &[&str] =
+        &["--seal", "--json", "--dry-run", "--force", "--detach", "--legacy", "-h", "--help"];
     let mut o = Opts::default();
     let mut i = 0;
     while i < args.len() {
@@ -208,6 +220,10 @@ fn load_key(path: &str) -> SigningKey {
         .try_into()
         .unwrap_or_else(|_| die("steward seed is not 32 bytes"));
     SigningKey::from_bytes(&seed)
+}
+
+fn hex_str(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn os_random_32() -> [u8; 32] {
@@ -293,12 +309,15 @@ fn cmd_attest(args: &[String]) {
     let issued_at = o.get("--issued-at").unwrap_or(now.as_str());
     let signed_at = o.get("--signed-at").unwrap_or(now.as_str());
 
+    let detach = o.has("--detach");
     let spec = ClaimSpec {
         about,
         kind,
         body: &body,
         media_type,
+        detach,
         support: &o.support,
+        refs: &[],
         language,
         community: o.get("--community"),
         occasion: o.get("--occasion"),
@@ -313,7 +332,18 @@ fn cmd_attest(args: &[String]) {
 
     write_out(&out, &att.to_cbor());
     println!("attested {id}");
-    println!("  kind: {kind}   about: {about}   ({} body bytes, {media_type})", body.len());
+    if detach {
+        let b3 = blake3::hash(&body);
+        println!(
+            "  kind: {kind}   about: {about}   (detached: {} body bytes committed, {media_type})",
+            body.len()
+        );
+        println!("  body_b3: {}   media key: z{}", b3.to_hex(), bs58::encode(b3.as_bytes()).into_string());
+        println!("  the attestation commits to the body but does not carry it — keep the");
+        println!("  body file where its custodian archives it (bundle it with --media).");
+    } else {
+        println!("  kind: {kind}   about: {about}   ({} body bytes, {media_type})", body.len());
+    }
     println!(
         "  signed by {} as '{role}' -> {out}",
         personal_steward_id(sk.verifying_key().as_bytes())
@@ -513,6 +543,7 @@ fn cmd_next(args: &[String]) {
         label: o.get("--label").unwrap_or(""),
         key: o.get("--key").map(std::path::PathBuf::from),
         decision: o.get("--decision"),
+        deliver: o.get("--deliver"),
     };
 
     match rites::execute_step(&comms_dir, rite, step, &inputs) {
@@ -581,6 +612,26 @@ fn cmd_verify(args: &[String]) {
         println!("media: {} blob{}", bundle.media.len(), plural(bundle.media.len()));
     }
 
+    // Body-status summary (A2.2): informational here — `verify` judges the
+    // seal; `inspect` gives the per-member picture.
+    let statuses: Vec<BodyStatus> = bundle
+        .attestations
+        .iter()
+        .filter_map(|a| match content_report(a, &bundle.media) {
+            ContentReport::Detached { status, .. } => Some(status),
+            _ => None,
+        })
+        .collect();
+    if !statuses.is_empty() {
+        let count = |s: BodyStatus| statuses.iter().filter(|x| **x == s).count();
+        println!(
+            "detached bodies: {} verified, {} absent, {} mismatched (see `inspect` for detail)",
+            count(BodyStatus::Verified),
+            count(BodyStatus::Absent),
+            count(BodyStatus::Mismatched),
+        );
+    }
+
     let report = verify_seal(&bundle);
     if let Some(by) = &report.sealed_by {
         println!("sealed by: {by}");
@@ -626,9 +677,19 @@ fn cmd_inspect(args: &[String]) {
 }
 
 /// Everything verified: every member's signatures hold, media content matches,
-/// and any seal present is valid.
+/// and any seal present is valid. Body status stays a separate judgment
+/// (A2.2): `absent` is normal and does not fail inspection; a `mismatched`
+/// body or malformed content map does — loudly, without being confused for a
+/// signature failure.
 fn inspect_ok(r: &InspectReport) -> bool {
     r.members.iter().all(|m| m.all_signatures_ok)
+        && r.members.iter().all(|m| {
+            !matches!(
+                m.content,
+                ContentReport::Malformed(_)
+                    | ContentReport::Detached { status: BodyStatus::Mismatched, .. }
+            )
+        })
         && r.media.iter().all(|(_, ok)| *ok)
         && (r.seal.sealed_by.is_none() || r.seal.ok)
 }
@@ -641,6 +702,32 @@ fn print_inspect(r: &InspectReport) {
         for s in &m.signatures {
             let glyph = if s.ok { "✓" } else { "✗" };
             println!("    {glyph} {} by {} — {}", s.role, s.by, s.detail);
+        }
+        match &m.content {
+            ContentReport::None | ContentReport::Embedded { .. } => {}
+            ContentReport::Detached { body_b3, body_len, status } => {
+                let glyph = match status {
+                    BodyStatus::Verified => "✓",
+                    BodyStatus::Absent => "·",
+                    BodyStatus::Mismatched => "✗",
+                };
+                println!(
+                    "    {glyph} body [{}] detached, {} byte{} committed, blake3 {}",
+                    status.as_str(),
+                    body_len,
+                    plural(*body_len as usize),
+                    hex_str(body_b3),
+                );
+                if *status == BodyStatus::Mismatched {
+                    println!(
+                        "      bytes at hand do not match the commitment — retained and \
+                         exportable, judge their provenance (A2.2)"
+                    );
+                }
+            }
+            ContentReport::Malformed(why) => {
+                println!("    ✗ content MALFORMED: {why}");
+            }
         }
         for r in &m.refs {
             let state = if r.resolves_in_bundle { "resolved" } else { "awaiting context" };
@@ -665,10 +752,26 @@ fn inspect_json(r: &InspectReport) -> String {
         .members
         .iter()
         .map(|m| {
+            let content = match &m.content {
+                ContentReport::None => serde_json::json!(null),
+                ContentReport::Embedded { len } => {
+                    serde_json::json!({"form": "embedded", "body_len": len, "body_status": "verified"})
+                }
+                ContentReport::Detached { body_b3, body_len, status } => serde_json::json!({
+                    "form": "detached",
+                    "body_b3_hex": hex_str(body_b3),
+                    "body_len": body_len,
+                    "body_status": status.as_str(),
+                }),
+                ContentReport::Malformed(why) => {
+                    serde_json::json!({"form": "malformed", "detail": why})
+                }
+            };
             serde_json::json!({
                 "id": m.id,
                 "claim_type": m.claim_type,
                 "is_seal": m.is_seal,
+                "content": content,
                 "all_signatures_ok": m.all_signatures_ok,
                 "signatures": m.signatures.iter().map(|s| serde_json::json!({
                     "by": s.by, "role": s.role, "alg": s.alg, "ok": s.ok, "detail": s.detail,
@@ -836,6 +939,118 @@ fn cmd_extract(args: &[String]) {
         bundle.media.len(),
         plural(bundle.media.len()),
     );
+}
+
+// ---- intake / audit (the archive profile's custody verbs) -------------------
+
+/// The archive root: the directory whose `.comms/comms.toml` declares
+/// profile "archive". Defaults to the current directory.
+fn resolve_archive_root(arg: Option<&str>) -> std::path::PathBuf {
+    let root = std::path::PathBuf::from(arg.unwrap_or("."));
+    let comms_dir = root.join(".comms");
+    match config::load(&comms_dir) {
+        Ok(cfg) if cfg.profile == "archive" => root,
+        Ok(cfg) => die(format!(
+            "{} declares profile '{}', not 'archive' — intake/audit run at the \
+             archive root (comms init <dir> --profile archive)",
+            comms_dir.join("comms.toml").display(),
+            cfg.profile
+        )),
+        Err(e) => die(format!("not an archive root: {e}")),
+    }
+}
+
+fn cmd_intake(args: &[String]) {
+    let o = parse_opts(args);
+    let source = o
+        .positionals
+        .first()
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            die("usage: comms intake <bundle|file|dir> [archive-root] --key <custodian key> \
+                 [--legacy --provenance S]")
+        });
+    let root = resolve_archive_root(o.positionals.get(1).map(String::as_str));
+    let archive = comms_core::archive::Archive::at(&root);
+    let key = comms_core::signing::load_signing_key(std::path::Path::new(o.require("--key")))
+        .unwrap_or_else(|e| die(e));
+
+    let report = if o.has("--legacy") {
+        let provenance = o.get("--provenance").unwrap_or_else(|| {
+            die("--legacy intake records testimony: state its provenance as honestly \
+                 as you can (--provenance \"found in contarchive/memory, believed session 3\")")
+        });
+        comms_core::archive::intake_legacy(&archive, std::path::Path::new(source), &key, provenance)
+    } else {
+        comms_core::archive::intake_bundle(&archive, std::path::Path::new(source), &key)
+    }
+    .unwrap_or_else(|e| die(format!("intake refused: {e}")));
+
+    if report.is_noop() {
+        println!(
+            "intake: no-op — all {} member{} and {} bod{} already in custody; no \
+             custody attestation written",
+            report.kept_members,
+            plural(report.kept_members),
+            report.kept_bodies,
+            if report.kept_bodies == 1 { "y" } else { "ies" },
+        );
+        return;
+    }
+    println!(
+        "intake: {} new member{} ({} kept), {} new bod{} ({} kept)",
+        report.new_members.len(),
+        plural(report.new_members.len()),
+        report.kept_members,
+        report.new_bodies.len(),
+        if report.new_bodies.len() == 1 { "y" } else { "ies" },
+        report.kept_bodies,
+    );
+    for tag in &report.views_regenerated {
+        println!("  view regenerated: views/sessions/{tag}/");
+    }
+    if let Some(id) = &report.custody_attestation {
+        println!("  custody attested: {id}");
+    }
+}
+
+fn cmd_audit(args: &[String]) {
+    let o = parse_opts(args);
+    let root = resolve_archive_root(o.positionals.first().map(String::as_str));
+    let archive = comms_core::archive::Archive::at(&root);
+    let r = comms_core::archive::audit(&archive).unwrap_or_else(|e| die(e));
+
+    println!(
+        "store:  {} intact, {} drifted",
+        r.store_intact,
+        r.store_drift.len()
+    );
+    for (name, why) in &r.store_drift {
+        println!("  ✗ {name}: {why}");
+    }
+    println!(
+        "bodies: {} intact, {} drifted, {} unreferenced (testimony or awaiting attestations)",
+        r.bodies_intact,
+        r.bodies_drift.len(),
+        r.bodies_unreferenced
+    );
+    for (name, why) in &r.bodies_drift {
+        println!("  ✗ {name}: {why}");
+    }
+    if !r.bodies_absent.is_empty() {
+        println!("absent bodies (committed in store, not in custody — normal for host-gated material):");
+        for (id, h) in &r.bodies_absent {
+            println!("  · {id} -> blake3 {h}");
+        }
+    }
+    if r.drift() {
+        println!(
+            "\ndrift found. Per the preservation stance nothing was deleted or repaired; \
+             judge the bytes and consider recording the drift as a custody attestation."
+        );
+        process::exit(1);
+    }
+    println!("\naudit clean: every id and hash re-derives.");
 }
 
 // ---- mint ------------------------------------------------------------------

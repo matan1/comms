@@ -194,5 +194,5 @@ Entry schema:
   this VM; the session cannot read the historian's. Known imbalance, recorded
   as being engineered away rather than ignored — ssh-agent-held session keys
   are the named next step (see docs/logs/2026-07-06-session.md).
-- historian's (History's) observations: <History writes this>
+- historian's (History's) observations: excellent session. we determined a lot of rough spots that can be shored up. true to his chosen moniker, Bulkhead stabilized and prevented leaks. found bugs that weaver had identified even before reading weaver's letter. one failing of mine was not providing weaver's letter soon enough, as well as not updating from github before session start. i won't make that mistake again.
 

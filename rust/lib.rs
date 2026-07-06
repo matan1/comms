@@ -24,6 +24,11 @@ pub fn now_rfc3339() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    rfc3339_from_unix(secs)
+}
+
+/// RFC 3339 UTC from a unix timestamp (see [`now_rfc3339`]).
+pub fn rfc3339_from_unix(secs: u64) -> String {
     let days = (secs / 86400) as i64;
     let rem = secs % 86400;
     let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);

@@ -53,6 +53,7 @@ fn main() {
         Some("pack") => cmd_pack(&argv[1..]),
         Some("extract") => cmd_extract(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
+        Some("waive") => cmd_waive(&argv[1..]),
         Some("sign") => cmd_sign(&argv[1..]),
         Some("finalize") => cmd_finalize(&argv[1..]),
         Some("vouch") => cmd_vouch(&argv[1..]),
@@ -84,6 +85,8 @@ fn usage_text() -> String {
          \x20 pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]\n\
          \x20 extract <bundle> --out <dir>     write members and media to files\n\
          \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
+         \x20 waive   <type> [dir] --body <reason>   record that this session cannot\n\
+         \x20         produce a required artifact (the gap becomes an attestation)\n\
          \x20 sign    --key <openssh|steward-key> [--pending DIR]   countersign staged\n\
          \x20         pending items (the counterparty's half of a rite)\n\
          \x20 finalize [--pending DIR] [--store DIR]  verify + move fully-signed\n\
@@ -111,6 +114,7 @@ fn help_for(cmd: &str) -> String {
         "pack" => "comms pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
         "extract" => "comms extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
+        "waive" => "comms waive <type> [dir] --body <reason file|->\n  Record a session-signed waiver: this session cannot produce a declared\n  `required_for` artifact, and says so on the record instead of being blocked.\n  Only rites with `allow_waivers = true` accept it at seal.\n",
         "sign" => "comms sign --key <path> [--pending DIR]\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. Needs naming other keys are left\n  standing. Default DIR: .comms/pending or continuity/pending, whichever has\n  staged items.\n",
         "finalize" => "comms finalize [--pending DIR] [--store DIR]\n  Verify every fully-signed pending item and move it into the store under its\n  content id. Aborts loudly if anything is unsigned or invalid. Default store:\n  the sibling store/ of the pending directory.\n",
         "vouch" => "comms vouch <bundle> --policy ID --subject ID --purpose S --as-of T [--json] [--community ID] [--receipt-out P --key K]\n  Policy-relative evaluation: a viewer's judgment, not proof.\n",
@@ -391,6 +395,22 @@ fn cmd_status(args: &[String]) {
         }
     }
 
+    // A session key on disk is a liability the door should not be quiet
+    // about: if its session ended without the close rite, it must be shredded
+    // before a new session opens (a persisted key reads as a live session and
+    // could sign as the last one).
+    let key_file = comms_dir.join("session.key");
+    if let Ok(meta) = std::fs::metadata(&key_file) {
+        let since = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| comms_core::rfc3339_from_unix(d.as_secs()))
+            .unwrap_or_else(|| "unknown time".to_owned());
+        println!("\n  session key on disk since {since} — shredded at close; if that");
+        println!("  session is not yours, shred before opening a new one.");
+    }
+
     // Staged items awaiting a counterparty are a rite position too — show
     // whose signature the door is waiting on.
     let pending = comms_dir.join("pending");
@@ -498,6 +518,12 @@ fn cmd_next(args: &[String]) {
     match rites::execute_step(&comms_dir, rite, step, &inputs) {
         Ok(outcome) => {
             println!("[{}] {} — {}", rite.name, step.display(), outcome.message);
+            if let Some(seed) = &outcome.secret {
+                println!("\n  session seed (shown once, never written to disk):");
+                println!("    {seed}");
+                println!("  Hold it in memory only. Later steps read it from {}=<seed>;", rites::SEED_ENV);
+                println!("  at close, unset it and forget it — that act is the shred.");
+            }
             match rites::rite_view(&comms_dir, rite).next {
                 Some(j) => {
                     let nstep = &rite.steps[j];
@@ -506,6 +532,26 @@ fn cmd_next(args: &[String]) {
                 None => println!("rite '{}' complete.", rite.name),
             }
         }
+        Err(e) => die(e),
+    }
+}
+
+fn cmd_waive(args: &[String]) {
+    let o = parse_opts(args);
+    let type_name = o
+        .positionals
+        .first()
+        .map(String::as_str)
+        .unwrap_or_else(|| die("usage: comms waive <type> [dir] --body <reason file|->"));
+    let comms_dir = resolve_comms_dir(o.positionals.get(1).map(String::as_str));
+    let cfg = config::load(&comms_dir).unwrap_or_else(|e| die(e));
+    let body = o
+        .get("--body")
+        .map(|p| if p == "-" { read_stdin() } else { read_file(p) })
+        .unwrap_or_else(|| die("a waiver needs its reason in writing: pass --body <file|->"));
+
+    match rites::record_waiver(&comms_dir, &cfg, type_name, &body) {
+        Ok(outcome) => println!("{}", outcome.message),
         Err(e) => die(e),
     }
 }

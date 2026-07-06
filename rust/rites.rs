@@ -58,6 +58,63 @@ pub fn session_id(comms_dir: &Path, rite: &Rite) -> Option<String> {
     std::fs::read_to_string(p).ok().map(|s| s.trim().to_owned())
 }
 
+/// The environment variable an ephemeral session's holder supplies the seed in.
+pub const SEED_ENV: &str = "COMMS_SESSION_SEED";
+
+/// Decode a base58 32-byte seed into a signing key.
+fn seed_from_b58(b58: &str) -> Result<ed25519_dalek::SigningKey, String> {
+    let seed = bs58::decode(b58.trim())
+        .into_vec()
+        .map_err(|e| format!("{SEED_ENV} is not base58: {e}"))?;
+    let seed: [u8; 32] = seed
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("{SEED_ENV} is not a 32-byte seed"))?;
+    Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
+}
+
+/// Does the holder's environment carry the seed for *this* session (the one
+/// named by the on-disk session id)? A seed for some other session does not
+/// count: the id derived from it must match.
+fn env_seed_matches(comms_dir: &Path, rite: &Rite) -> bool {
+    let Some(sid) = session_id(comms_dir, rite) else {
+        return false;
+    };
+    let Ok(b58) = std::env::var(SEED_ENV) else {
+        return false;
+    };
+    seed_from_b58(&b58)
+        .map(|sk| personal_steward_id(sk.verifying_key().as_bytes()) == sid)
+        .unwrap_or(false)
+}
+
+/// The signing key of the live session: the on-disk key file if present, else
+/// a seed the holder supplies through the environment — which must derive the
+/// on-disk session id, so nobody quietly signs as a different steward.
+fn session_signer(comms_dir: &Path, rite: &Rite) -> Result<ed25519_dalek::SigningKey, String> {
+    let kp = key_path(comms_dir, &session_target(rite));
+    if kp.exists() {
+        return keyfile::load(&kp);
+    }
+    let Ok(b58) = std::env::var(SEED_ENV) else {
+        return Err(format!(
+            "no session key at {} and {SEED_ENV} is not set — mint first (or export \
+             the seed you were shown at mint)",
+            kp.display()
+        ));
+    };
+    let sk = seed_from_b58(&b58)?;
+    let id = personal_steward_id(sk.verifying_key().as_bytes());
+    match session_id(comms_dir, rite) {
+        Some(sid) if sid == id => Ok(sk),
+        Some(sid) => Err(format!(
+            "{SEED_ENV} derives {id}, but the session on record is {sid} — refusing to \
+             sign as a different steward"
+        )),
+        None => Err("no session on record — mint first".to_owned()),
+    }
+}
+
 /// A short, filename-safe tag for the current session, derived from its steward
 /// id. `None` until the session has been minted. Used to scope artifact names
 /// so a new session does not overwrite a prior one's.
@@ -116,6 +173,99 @@ fn decision_output(comms_dir: &Path, rite: &Rite, verb: &str, target: &str) -> P
     comms_dir.join("store").join(name)
 }
 
+/// Where a recorded waiver for an artifact type lands. Session-scoped like
+/// every other attest output.
+fn waiver_output(comms_dir: &Path, rite: &Rite, type_name: &str) -> PathBuf {
+    let name = match session_tag(comms_dir, rite) {
+        Some(tag) => format!("waiver.{type_name}.{tag}.cbor"),
+        None => format!("waiver.{type_name}.cbor"),
+    };
+    comms_dir.join("store").join(name)
+}
+
+/// The attest target an artifact type's presence is checked under: rite steps
+/// say `attest transcript` while the type is declared `[artifact_types.transcripts]`,
+/// so the singular form is tried alongside the declared name.
+fn type_targets(type_name: &str) -> Vec<String> {
+    let mut t = vec![type_name.to_owned()];
+    if let Some(singular) = type_name.strip_suffix('s') {
+        if !singular.is_empty() {
+            t.push(singular.to_owned());
+        }
+    }
+    t
+}
+
+/// Declared-but-absent artifact types for a rite: those whose `required_for`
+/// names it and for which this session's store holds neither an attested
+/// artifact nor (when the rite allows them) a recorded waiver.
+pub fn required_missing(
+    comms_dir: &Path,
+    cfg: &HarnessConfig,
+    rite: &Rite,
+) -> Vec<String> {
+    cfg.artifact_types
+        .iter()
+        .filter(|t| t.required_for.contains(&rite.name))
+        .filter(|t| {
+            let attested = type_targets(&t.name)
+                .iter()
+                .any(|target| attest_output(comms_dir, rite, target).exists());
+            let waived = rite.allow_waivers && waiver_output(comms_dir, rite, &t.name).exists();
+            !attested && !waived
+        })
+        .map(|t| t.name.clone())
+        .collect()
+}
+
+/// Record a session-signed waiver for an artifact type this session cannot
+/// produce. The waiver is an attestation like anything else: the gap in the
+/// record is itself recorded, not papered over.
+pub fn record_waiver(
+    comms_dir: &Path,
+    cfg: &HarnessConfig,
+    type_name: &str,
+    body: &[u8],
+) -> Result<ExecOutcome, String> {
+    if cfg.artifact_type(type_name).is_none() {
+        let declared: Vec<_> = cfg.artifact_types.iter().map(|t| t.name.as_str()).collect();
+        return Err(format!(
+            "no artifact type '{type_name}' declared in comms.toml (declared: {})",
+            declared.join(", ")
+        ));
+    }
+    // Waivers are session acts; scope them via the conventional session rite
+    // shape so the tag matches every other artifact of this session.
+    let rite = Rite {
+        name: "waiver".to_owned(),
+        steps: vec![Step { verb: "mint".to_owned(), target: Some("session".to_owned()) }],
+        allow_waivers: false,
+    };
+    let sk = session_signer(comms_dir, &rite)?;
+    let now = now_rfc3339();
+    let spec = ClaimSpec {
+        about: type_name,
+        kind: "waiver",
+        body,
+        media_type: "text/markdown",
+        support: &[],
+        language: "zxx",
+        community: None,
+        occasion: Some("waiver"),
+        issued_at: &now,
+    };
+    let att = author_general_claim(&spec, &sk, "author", &now);
+    let out = waiver_output(comms_dir, &rite, type_name);
+    std::fs::create_dir_all(out.parent().unwrap())
+        .map_err(|e| format!("{}: {e}", out.parent().unwrap().display()))?;
+    std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
+    Ok(ExecOutcome {
+        message: format!("recorded waiver of '{type_name}' {} -> {}", att.id(), out.display()),
+        output: Some(out),
+        secret: None,
+    })
+}
+
 /// Where a step's product lands on disk, if it has one.
 pub fn step_output(comms_dir: &Path, rite: &Rite, step: &Step) -> Option<PathBuf> {
     let target = step.target.as_deref();
@@ -170,8 +320,16 @@ fn countersign_recorded(comms_dir: &Path, rite: &Rite) -> bool {
 /// Is this step satisfied by what's on disk?
 pub fn step_done(comms_dir: &Path, rite: &Rite, step: &Step) -> bool {
     match step_output(comms_dir, rite, step) {
-        // shred's goal is the seed's *absence*.
-        Some(out) if step.verb == "shred" => !out.exists(),
+        // mint is done while the session's seed is reachable: as the on-disk
+        // key file, or (ephemeral mode) as a holder-supplied seed deriving the
+        // on-disk session id.
+        Some(out) if step.verb == "mint" => out.exists() || env_seed_matches(comms_dir, rite),
+        // shred's goal is the seed's *absence* — from disk and, in ephemeral
+        // mode, from the holder's environment. A seed still reachable anywhere
+        // is not destroyed, and the step says so.
+        Some(out) if step.verb == "shred" => {
+            !out.exists() && !env_seed_matches(comms_dir, rite)
+        }
         // countersign is done once staged (the counterparty's signature is
         // their act, tracked as an outstanding need) — or once their
         // endorsement has been finalized into the store and staging cleared.
@@ -261,6 +419,9 @@ pub struct ExecInputs<'a> {
 pub struct ExecOutcome {
     pub message: String,
     pub output: Option<PathBuf>,
+    /// A secret shown exactly once and never persisted (the ephemeral session
+    /// seed). The caller decides how to display it; nothing here writes it.
+    pub secret: Option<String>,
 }
 
 /// Perform a single rite step. `Err` carries a message naming what's missing.
@@ -275,31 +436,84 @@ pub fn execute_step(
         "mint" => {
             let kp = key_path(comms_dir, &session_target(rite));
             if kp.exists() {
-                return Err(format!("session key already present at {}", kp.display()));
+                return Err(format!(
+                    "session key already present at {} — if it is yours, carry on; if it \
+                     was left by a session that ended without its close rite, shred it \
+                     before opening (a persisted key would let this session sign as the \
+                     last one)",
+                    kp.display()
+                ));
             }
-            let sk = keyfile::mint(&kp, inputs.label)?;
-            let id = personal_steward_id(sk.verifying_key().as_bytes());
-            // Record the public session id beside the (secret) key; it outlives
-            // shred so this session's artifacts stay attributable afterward.
+            if env_seed_matches(comms_dir, rite) {
+                return Err(format!(
+                    "an ephemeral session is already live: {SEED_ENV} derives the session \
+                     id on record",
+                ));
+            }
+            let ephemeral = config::load(comms_dir)
+                .map(|c| c.session_key == "ephemeral")
+                .unwrap_or(false);
             let idp = session_id_path(comms_dir, &session_target(rite));
-            std::fs::write(&idp, &id).map_err(|e| format!("{}: {e}", idp.display()))?;
-            Ok(ExecOutcome {
-                message: format!("minted session key {id}"),
-                output: Some(kp),
-            })
+            if ephemeral {
+                let sk = keyfile::generate()?;
+                let id = personal_steward_id(sk.verifying_key().as_bytes());
+                let stale = session_id(comms_dir, rite);
+                // Record the public session id; the seed goes to the caller
+                // only, never to disk. A stale id from a session whose seed is
+                // no longer reachable (closed or crashed — in ephemeral mode
+                // the seed dies either way) is overwritten; its artifacts stay
+                // attributable through their embedded signatures.
+                std::fs::write(&idp, &id).map_err(|e| format!("{}: {e}", idp.display()))?;
+                let seed_b58 = bs58::encode(sk.to_bytes()).into_string();
+                let noted = match stale {
+                    Some(old) if old != id => {
+                        format!(" (superseding closed session {old})")
+                    }
+                    _ => String::new(),
+                };
+                Ok(ExecOutcome {
+                    message: format!("minted ephemeral session key {id}{noted}"),
+                    output: Some(idp),
+                    secret: Some(seed_b58),
+                })
+            } else {
+                let sk = keyfile::mint(&kp, inputs.label)?;
+                let id = personal_steward_id(sk.verifying_key().as_bytes());
+                // Record the public session id beside the (secret) key; it outlives
+                // shred so this session's artifacts stay attributable afterward.
+                std::fs::write(&idp, &id).map_err(|e| format!("{}: {e}", idp.display()))?;
+                Ok(ExecOutcome {
+                    message: format!("minted session key {id}"),
+                    output: Some(kp),
+                    secret: None,
+                })
+            }
         }
         "shred" => {
             let kp = key_path(comms_dir, &session_target(rite));
-            if !kp.exists() {
+            let had_file = kp.exists();
+            if had_file {
+                keyfile::shred(&kp)?;
+            }
+            if env_seed_matches(comms_dir, rite) {
                 return Ok(ExecOutcome {
-                    message: "session key already absent".to_owned(),
+                    message: format!(
+                        "no key file remains, but the seed still lives with its holder: \
+                         unset {SEED_ENV} and forget it — shred reads done only once no \
+                         environment can produce the seed"
+                    ),
                     output: Some(kp),
+                    secret: None,
                 });
             }
-            keyfile::shred(&kp)?;
             Ok(ExecOutcome {
-                message: "session key destroyed (seed gone)".to_owned(),
+                message: if had_file {
+                    "session key destroyed (seed gone)".to_owned()
+                } else {
+                    "session key already absent".to_owned()
+                },
                 output: Some(kp),
+                secret: None,
             })
         }
         "attest" => {
@@ -307,7 +521,7 @@ pub fn execute_step(
                 .body
                 .as_deref()
                 .ok_or_else(|| format!("step '{}' needs content: pass --body <file>", step.display()))?;
-            let sk = keyfile::load(&key_path(comms_dir, &session_target(rite)))?;
+            let sk = session_signer(comms_dir, rite)?;
             let target = step.target.as_deref().unwrap_or("entry");
             let about = inputs.about.unwrap_or(target);
             let spec = ClaimSpec {
@@ -329,10 +543,32 @@ pub fn execute_step(
             Ok(ExecOutcome {
                 message: format!("attested {} -> {}", att.id(), out.display()),
                 output: Some(out),
+                secret: None,
             })
         }
         "seal" | "pack" => {
-            let sk = keyfile::load(&key_path(comms_dir, &session_target(rite)))?;
+            // Declared requirements are enforced here, not merely documented:
+            // a rite does not seal while a required artifact is neither
+            // attested nor (where the rite allows it) waived.
+            if let Ok(cfg) = config::load(comms_dir) {
+                let missing = required_missing(comms_dir, &cfg, rite);
+                if !missing.is_empty() {
+                    let waiver_hint = if rite.allow_waivers {
+                        "attest it, or record the gap: comms waive <type> --body <reason file>"
+                    } else {
+                        "attest it first; this rite does not allow waivers"
+                    };
+                    return Err(format!(
+                        "cannot {}: rite '{}' requires [{}] and this session's store has \
+                         neither the artifact nor a waiver — {}",
+                        step.verb,
+                        rite.name,
+                        missing.join(", "),
+                        waiver_hint
+                    ));
+                }
+            }
+            let sk = session_signer(comms_dir, rite)?;
             let store = comms_dir.join("store");
             let mut files: Vec<PathBuf> = std::fs::read_dir(&store)
                 .map_err(|e| format!("{}: {e}", store.display()))?
@@ -369,6 +605,7 @@ pub fn execute_step(
                     out.display()
                 ),
                 output: Some(out),
+                secret: None,
             })
         }
         "countersign" => {
@@ -434,13 +671,14 @@ pub fn execute_step(
                     pending_dir(comms_dir).display()
                 ),
                 output: Some(out),
+                secret: None,
             })
         }
         "request" => {
             let body = inputs.body.as_deref().ok_or_else(|| {
                 format!("step '{}' needs the ask in writing: pass --body <file>", step.display())
             })?;
-            let sk = keyfile::load(&key_path(comms_dir, &session_target(rite)))?;
+            let sk = session_signer(comms_dir, rite)?;
             let target = step.target.as_deref().unwrap_or("archive");
             let spec = ClaimSpec {
                 about: inputs.about.unwrap_or(target),
@@ -461,6 +699,7 @@ pub fn execute_step(
             Ok(ExecOutcome {
                 message: format!("recorded request {} -> {}", att.id(), out.display()),
                 output: Some(out),
+                secret: None,
             })
         }
         "grant" => {
@@ -511,6 +750,7 @@ pub fn execute_step(
                     out.display()
                 ),
                 output: Some(out),
+                secret: None,
             })
         }
         other => Err(format!("unknown rite verb '{other}' (step '{}')", step.display())),
@@ -745,6 +985,148 @@ steps = ["request archive", "grant archive"]
         let step = Step { verb: "countersign".into(), target: Some("session".into()) };
         let err = execute_step(&comms, open, &step, &ExecInputs::default()).unwrap_err();
         assert!(err.contains("[countersign]"), "unexpected error: {err}");
+    }
+
+    /// A toml body declaring transcripts required for close. `waivers` toggles
+    /// whether close accepts a recorded waiver in place of the artifact.
+    fn required_toml(waivers: bool, session_key: &str) -> String {
+        format!(
+            r#"
+profile = "continuity"
+session_key = "{session_key}"
+[rites.open]
+steps = ["mint session", "attest entry"]
+[rites.close]
+steps = ["attest transcript", "seal store", "shred session"]
+allow_waivers = {waivers}
+[artifact_types.transcripts]
+dir = "transcripts"
+required_for = ["close"]
+"#
+        )
+    }
+
+    #[test]
+    fn seal_refuses_missing_required_artifact_until_waived() {
+        let comms = scratch("reqseal");
+        let toml_text = required_toml(true, "file");
+        std::fs::write(comms.join("comms.toml"), &toml_text).unwrap();
+        let cfg = HarnessConfig::from_toml(&config::parse(&toml_text).unwrap());
+        let open = cfg.rite("open").unwrap();
+        let close = cfg.rite("close").unwrap();
+
+        // Open a session and attest something so the store is non-empty, but
+        // do NOT attest the required transcript.
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        let entry = ExecInputs { body: Some(b"# entry\n".to_vec()), ..Default::default() };
+        execute_step(&comms, open, &open.steps[1], &entry).unwrap();
+
+        let err = execute_step(&comms, close, &close.steps[1], &ExecInputs::default())
+            .unwrap_err();
+        assert!(err.contains("transcripts"), "must name the missing type: {err}");
+        assert!(err.contains("waive"), "must point at the waiver path: {err}");
+
+        // A waiver for an undeclared type is refused.
+        let bad = record_waiver(&comms, &cfg, "poems", b"none");
+        assert!(bad.unwrap_err().contains("no artifact type 'poems'"));
+
+        // Recording the gap unblocks the seal; the waiver itself is in the store.
+        record_waiver(&comms, &cfg, "transcripts", b"cut off mid-stream").unwrap();
+        execute_step(&comms, close, &close.steps[1], &ExecInputs::default()).unwrap();
+        assert!(step_done(&comms, close, &close.steps[1]));
+        let waivers: Vec<_> = std::fs::read_dir(comms.join("store"))
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name().into_string().unwrap()))
+            .filter(|n| n.starts_with("waiver.transcripts."))
+            .collect();
+        assert_eq!(waivers.len(), 1);
+    }
+
+    #[test]
+    fn seal_ignores_waivers_where_the_rite_disallows_them() {
+        let comms = scratch("noswaiver");
+        let toml_text = required_toml(false, "file");
+        std::fs::write(comms.join("comms.toml"), &toml_text).unwrap();
+        let cfg = HarnessConfig::from_toml(&config::parse(&toml_text).unwrap());
+        let open = cfg.rite("open").unwrap();
+        let close = cfg.rite("close").unwrap();
+
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        let entry = ExecInputs { body: Some(b"# entry\n".to_vec()), ..Default::default() };
+        execute_step(&comms, open, &open.steps[1], &entry).unwrap();
+        record_waiver(&comms, &cfg, "transcripts", b"trying anyway").unwrap();
+
+        let err = execute_step(&comms, close, &close.steps[1], &ExecInputs::default())
+            .unwrap_err();
+        assert!(err.contains("does not allow waivers"), "waiver must not count: {err}");
+
+        // The artifact itself still satisfies the requirement.
+        let tx = ExecInputs { body: Some(b"transcript\n".to_vec()), ..Default::default() };
+        execute_step(&comms, close, &close.steps[0], &tx).unwrap();
+        execute_step(&comms, close, &close.steps[1], &ExecInputs::default()).unwrap();
+    }
+
+    /// Serializes the tests that touch COMMS_SESSION_SEED (process-global).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn ephemeral_session_seed_never_touches_disk() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(SEED_ENV);
+
+        let comms = scratch("ephemeral");
+        let toml_text = required_toml(true, "ephemeral");
+        std::fs::write(comms.join("comms.toml"), &toml_text).unwrap();
+        let cfg = HarnessConfig::from_toml(&config::parse(&toml_text).unwrap());
+        let open = cfg.rite("open").unwrap();
+        let close = cfg.rite("close").unwrap();
+
+        // Mint: the seed goes to the caller alone; only the public id lands on disk.
+        let minted = execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        let seed = minted.secret.expect("ephemeral mint must hand the seed to the caller");
+        assert!(!comms.join("session.key").exists(), "seed must not be written to disk");
+        let sid = session_id(&comms, open).unwrap();
+
+        // Without the seed in the environment the session is unreachable:
+        // mint does not read done, and signing steps say what is missing.
+        assert!(!step_done(&comms, open, &open.steps[0]));
+        let entry = ExecInputs { body: Some(b"# entry\n".to_vec()), ..Default::default() };
+        let err = execute_step(&comms, open, &open.steps[1], &entry).unwrap_err();
+        assert!(err.contains(SEED_ENV), "unhelpful error: {err}");
+
+        // A seed for a *different* key must be refused, not signed with.
+        let other = keyfile::generate().unwrap();
+        std::env::set_var(SEED_ENV, bs58::encode(other.to_bytes()).into_string());
+        let err = execute_step(&comms, open, &open.steps[1], &entry).unwrap_err();
+        assert!(err.contains("refusing"), "wrong seed must be refused: {err}");
+
+        // With the right seed the session lives: mint reads done, attest signs as it.
+        std::env::set_var(SEED_ENV, &seed);
+        assert!(step_done(&comms, open, &open.steps[0]));
+        execute_step(&comms, open, &open.steps[1], &entry).unwrap();
+        let entry_att = parse_attestation(
+            &std::fs::read(step_output(&comms, open, &open.steps[1]).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(entry_att.signatures[0].by, sid);
+
+        // Shred cannot reach into the holder's memory: while the environment
+        // still carries the seed, the step is not done and says so.
+        let tx = ExecInputs { body: Some(b"transcript\n".to_vec()), ..Default::default() };
+        execute_step(&comms, close, &close.steps[0], &tx).unwrap();
+        execute_step(&comms, close, &close.steps[1], &ExecInputs::default()).unwrap(); // seal
+        let out = execute_step(&comms, close, &close.steps[2], &ExecInputs::default()).unwrap();
+        assert!(out.message.contains("unset"), "shred must name the holder's act: {}", out.message);
+        assert!(!step_done(&comms, close, &close.steps[2]));
+
+        // Forgetting the seed is the shred. Afterward the session is closed:
+        // a new mint supersedes the stale id rather than getting stuck.
+        std::env::remove_var(SEED_ENV);
+        assert!(step_done(&comms, close, &close.steps[2]));
+        let minted2 = execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        assert!(minted2.secret.is_some());
+        let sid2 = session_id(&comms, open).unwrap();
+        assert_ne!(sid, sid2, "a new session must not inherit the old identity");
     }
 
     #[test]

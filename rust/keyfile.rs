@@ -26,6 +26,12 @@ pub fn load(path: &Path) -> Result<SigningKey, String> {
     Ok(SigningKey::from_bytes(&seed))
 }
 
+/// Generate a fresh key without writing anything: the ephemeral path. The
+/// seed exists only in this process and wherever the caller chooses to hold it.
+pub fn generate() -> Result<SigningKey, String> {
+    Ok(SigningKey::from_bytes(&os_random_32()?))
+}
+
 /// Mint a fresh key and write it to `path` (mode 0600 on unix). Returns the key.
 pub fn mint(path: &Path, label: &str) -> Result<SigningKey, String> {
     let seed = os_random_32()?;

@@ -229,6 +229,11 @@ pub struct CountersignCfg {
 pub struct HarnessConfig {
     pub profile: String,
     pub archive_mode: Option<String>,
+    /// How the session seed is held: `"file"` (default — written to
+    /// `<comms>/session.key`, destroyed at shred) or `"ephemeral"` (never
+    /// written; shown once at mint and supplied back by the holder through
+    /// `COMMS_SESSION_SEED`, so a crashed session's seed dies with it).
+    pub session_key: String,
     pub rites: Vec<Rite>,
     pub artifact_types: Vec<ArtifactType>,
     pub countersign: Option<CountersignCfg>,
@@ -245,6 +250,11 @@ impl HarnessConfig {
             .get("archive", "mode")
             .and_then(TomlValue::as_str)
             .map(str::to_owned);
+        let session_key = toml
+            .get("", "session_key")
+            .and_then(TomlValue::as_str)
+            .unwrap_or("file")
+            .to_owned();
 
         let rites = toml
             .children_of("rites")
@@ -303,7 +313,7 @@ impl HarnessConfig {
                     .map(str::to_owned),
             });
 
-        HarnessConfig { profile, archive_mode, rites, artifact_types, countersign }
+        HarnessConfig { profile, archive_mode, session_key, rites, artifact_types, countersign }
     }
 
     pub fn rite(&self, name: &str) -> Option<&Rite> {
@@ -405,6 +415,14 @@ required_for = ["close"]
         let tx = cfg.artifact_type("transcripts").unwrap();
         assert_eq!(tx.dir, "transcripts");
         assert_eq!(tx.required_for, vec!["close".to_owned()]);
+    }
+
+    #[test]
+    fn session_key_mode_defaults_to_file() {
+        let cfg = HarnessConfig::from_toml(&parse(SAMPLE).unwrap());
+        assert_eq!(cfg.session_key, "file");
+        let eph = HarnessConfig::from_toml(&parse("session_key = \"ephemeral\"\n").unwrap());
+        assert_eq!(eph.session_key, "ephemeral");
     }
 
     #[test]

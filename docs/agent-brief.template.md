@@ -3,9 +3,9 @@
 
 ## Read this first — before CLAUDE.md or the project primer
 
-SOURCE:   /workspace/source-ro/tasks/comms/<task>/
-REPO:     /home/agent/work/comms/<task>/repo/
-STAGING:  /workspace/agent-rw/tasks/comms/<task>/
+SOURCE:   /workspace/in/comms/ #canonical read only repo
+REPO:     /home/agent/comms/ #working repo, make changes here
+STAGING:  /workspace/out/ #where to put files that need testing on host, staging for upstreaming or archiving
 
 REPO is your working directory — it is already checked out and is where all development
 happens. Do all file editing, building, and committing here.
@@ -15,7 +15,17 @@ Do not use it as a working directory — it is not efficient for incremental fil
 and the host uses it to test your committed code before it enters the canonical repository
 (which is not visible to you). Only push to STAGING when you have commits ready for review.
 
-See /home/agent/work/this.vm.your.task.txt for tooling and VM environment details.
+## Project ##
+
+Comms is a project to build a toolkit and associated demonstrations for facilitating trust based communities among humans and agents both
+It provides tooling for attesting claims in a verifiable manner.
+We're also an experiment in how agents and their principal share and propogate knowledge between sessions, which we call our Trial of Continuity.
+The toolkit is integral to the trial and used in it.
+Comms can be used to convert any project repo to use the continuity framework themselves, just as its used here.
+The best place to learn about the project and its status is in the docs/project-primer.md intro document.
+The trial of continuity component of the repo is largely in the continuity directory, but may increasingly be based in the .comms directory (TBD)
+This is an evolving project
+
 
 ## Task
 

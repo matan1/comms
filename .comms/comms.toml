@@ -3,6 +3,13 @@
 schema = "comms-harness/1"
 profile = "continuity"
 
+# How the session seed is held: "file" (session.key on disk, destroyed at
+# shred) or "ephemeral" (never written; mint shows it once and later steps
+# read COMMS_SESSION_SEED). This trial keeps file mode: its session holders
+# are agents whose context is itself recorded, so a seed passing through the
+# environment would land in the transcript — see harness.md.
+session_key = "file"    # file | ephemeral
+
 [archive]
 # The richer history (letters, transcripts, memories) lives outside the repo and
 # is requested, never auto-loaded.

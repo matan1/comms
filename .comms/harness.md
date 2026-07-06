@@ -28,6 +28,8 @@ content-addressed attestations offline:
               their key lives; needs naming other keys are left standing.
 - `finalize`— verify fully-signed pending items and move them into the store
               under their content id. Aborts loudly on anything unsigned.
+- `waive`   — record, under the session key, that a `required_for` artifact
+              cannot be produced this session. The gap becomes an attestation.
 - `vouch`   — a candidate policy-relative evaluator (judgment, not proof).
 
 ## Rites are config-driven
@@ -59,11 +61,30 @@ record, not a failure); the rest run on their own. `status` always shows the
 exact next command and any staged item still awaiting a signature. `--rite` is
 optional — with no flag, `next` advances the rite you're currently in.
 
-## Still by hand (for now)
+## Requirements are enforced, gaps are recorded
 
-Declared `required_for` artifacts are not yet enforced at `seal`/close, and the
-session key still touches disk between `mint` and `shred` (an in-memory
-ephemeral key is the honest fix). Those are the next increments.
+Declared `required_for` artifacts are enforced at `seal`: a rite does not seal
+while a required artifact is neither attested nor waived. A session that
+cannot produce one records the gap instead of being blocked —
+`comms waive <type> --body <reason>` — and the waiver is itself a
+session-signed attestation (honored only where the rite sets
+`allow_waivers = true`).
+
+## The session key can live in memory only
+
+By default the session seed is a file (`session.key`, destroyed at shred). A
+file that outlives a crashed session is a liability: the next session's open
+rite reads as done, and the key could sign as its dead owner — `status` warns
+whenever a key is sitting on disk. Set `session_key = "ephemeral"` in
+`comms.toml` and the seed never touches disk at all: `mint` shows it exactly
+once, later steps read it from `COMMS_SESSION_SEED` in the holder's
+environment (it must derive the recorded session id, so a wrong seed cannot
+quietly sign), and the shred is the holder unsetting and forgetting it — the
+tool reports the step done only once no environment can produce the seed. A
+crashed ephemeral session's seed dies with it. The trade: the seed passes
+through the holder's memory and environment, so a holder whose own context is
+recorded (e.g. an agent transcript) should prefer the file mode and shred at
+close.
 
 ## The stance
 

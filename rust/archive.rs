@@ -31,8 +31,8 @@ use crate::bundle::{
     BodyStatus, Bundle, ClaimSpec, ContentReport,
 };
 use crate::cbor::Value;
-use crate::steward::Attestation;
 use crate::now_rfc3339;
+use crate::steward::Attestation;
 
 /// The fixed custody directories beside the archive's `.comms/` door.
 pub struct Archive {
@@ -41,7 +41,9 @@ pub struct Archive {
 
 impl Archive {
     pub fn at(root: &Path) -> Archive {
-        Archive { root: root.to_path_buf() }
+        Archive {
+            root: root.to_path_buf(),
+        }
     }
 
     pub fn store(&self) -> PathBuf {
@@ -131,9 +133,11 @@ pub fn intake_bundle(
     // `mismatched` blob inside an arriving bundle is refused — custody takes
     // what the seal vouches for, and these bytes contradict their own name.
     if inspect.seal.sealed_by.is_none() {
-        return Err("bundle carries no A1.8 seal — intake takes sealed close bundles \
+        return Err(
+            "bundle carries no A1.8 seal — intake takes sealed close bundles \
                     (unattested material goes through --legacy)"
-            .to_owned());
+                .to_owned(),
+        );
     }
     if !inspect.seal.ok {
         return Err(format!(
@@ -143,10 +147,16 @@ pub fn intake_bundle(
     }
     for m in &inspect.members {
         if !m.all_signatures_ok {
-            return Err(format!("member {} has invalid signatures — refusing intake", m.id));
+            return Err(format!(
+                "member {} has invalid signatures — refusing intake",
+                m.id
+            ));
         }
         if let ContentReport::Malformed(why) = &m.content {
-            return Err(format!("member {} content malformed: {why} — refusing intake", m.id));
+            return Err(format!(
+                "member {} content malformed: {why} — refusing intake",
+                m.id
+            ));
         }
     }
     for (key, ok) in &inspect.media {
@@ -222,13 +232,22 @@ pub fn intake_bundle(
         let mut body = String::new();
         body.push_str(&format!(
             "# custody: intake of {}\n\nseal: {seal_id}\n\n",
-            bundle_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            bundle_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
         ));
-        body.push_str(&format!("members ingested ({}):\n", report.new_members.len()));
+        body.push_str(&format!(
+            "members ingested ({}):\n",
+            report.new_members.len()
+        ));
         for id in &report.new_members {
             body.push_str(&format!("- {id}\n"));
         }
-        body.push_str(&format!("\nbodies ingested ({}):\n", report.new_bodies.len()));
+        body.push_str(&format!(
+            "\nbodies ingested ({}):\n",
+            report.new_bodies.len()
+        ));
         for h in &report.new_bodies {
             body.push_str(&format!("- blake3 {h}\n"));
         }
@@ -348,9 +367,15 @@ fn regenerate_views(archive: &Archive, bundle: &Bundle) -> Result<Vec<String>, S
     // Group general-claim members by their author steward (the session key).
     let mut by_session: BTreeMap<String, Vec<&Attestation>> = BTreeMap::new();
     for att in &bundle.attestations {
-        let Some(by) = att.signatures.first().map(|s| s.by.clone()) else { continue };
-        let tag: String =
-            by.strip_prefix("comms.steward:").unwrap_or(&by).chars().take(16).collect();
+        let Some(by) = att.signatures.first().map(|s| s.by.clone()) else {
+            continue;
+        };
+        let tag: String = by
+            .strip_prefix("comms.steward:")
+            .unwrap_or(&by)
+            .chars()
+            .take(16)
+            .collect();
         by_session.entry(tag).or_default().push(att);
     }
 
@@ -362,28 +387,47 @@ fn regenerate_views(archive: &Archive, bundle: &Bundle) -> Result<Vec<String>, S
         }
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for att in atts {
-            let Some(claim) = att.core.get("c") else { continue };
+            let Some(claim) = att.core.get("c") else {
+                continue;
+            };
             if claim.get("t").and_then(Value::as_text) != Some("general-claim/1") {
                 continue;
             }
-            let about = claim.get("about").and_then(Value::as_text).unwrap_or("artifact");
-            let Some(content) = claim.get("content") else { continue };
-            let mt = content.get("media_type").and_then(Value::as_text).unwrap_or("");
+            let about = claim
+                .get("about")
+                .and_then(Value::as_text)
+                .unwrap_or("artifact");
+            let Some(content) = claim.get("content") else {
+                continue;
+            };
+            let mt = content
+                .get("media_type")
+                .and_then(Value::as_text)
+                .unwrap_or("");
             let id = att.id();
-            let tail: String = id.chars().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+            let tail: String = id
+                .chars()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             let name = format!("{}.{}{}", sanitize(about), tail, ext_for(mt));
 
             // Embedded body: the bytes are in the claim. Detached: copy from
             // custody when present; an absent body simply leaves no view file
             // (the commitment is still browsable in store/).
-            let bytes: Option<Vec<u8>> = if let Some(b) = content.get("body").and_then(Value::as_bytes)
-            {
-                Some(b.to_vec())
-            } else if let Some(b3) = content.get("body_b3").and_then(Value::as_bytes) {
-                archive.body_file(&hex(b3)).and_then(|p| std::fs::read(p).ok())
-            } else {
-                None
-            };
+            let bytes: Option<Vec<u8>> =
+                if let Some(b) = content.get("body").and_then(Value::as_bytes) {
+                    Some(b.to_vec())
+                } else if let Some(b3) = content.get("body_b3").and_then(Value::as_bytes) {
+                    archive
+                        .body_file(&hex(b3))
+                        .and_then(|p| std::fs::read(p).ok())
+                } else {
+                    None
+                };
             if let Some(bytes) = bytes {
                 let path = dir.join(name);
                 std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -395,7 +439,15 @@ fn regenerate_views(archive: &Archive, bundle: &Bundle) -> Result<Vec<String>, S
 }
 
 fn sanitize(s: &str) -> String {
-    s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect()
+    s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 // ---- audit ------------------------------------------------------------------
@@ -442,7 +494,11 @@ pub fn audit(archive: &Archive) -> Result<AuditReport, String> {
             .collect();
         entries.sort();
         for p in entries {
-            let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let name = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             let stem = name.split('.').next().unwrap_or("").to_owned();
             let Ok(blob) = std::fs::read(&p) else {
                 report.bodies_drift.push((name, "unreadable".to_owned()));
@@ -475,7 +531,11 @@ pub fn audit(archive: &Archive) -> Result<AuditReport, String> {
             .collect();
         entries.sort();
         for p in entries {
-            let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let name = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             let Ok(bytes) = std::fs::read(&p) else {
                 report.store_drift.push((name, "unreadable".to_owned()));
                 continue;
@@ -483,16 +543,19 @@ pub fn audit(archive: &Archive) -> Result<AuditReport, String> {
             let att = match parse_attestation(&bytes) {
                 Ok(a) => a,
                 Err(e) => {
-                    report.store_drift.push((name, format!("does not parse: {e} — retained")));
+                    report
+                        .store_drift
+                        .push((name, format!("does not parse: {e} — retained")));
                     continue;
                 }
             };
             let id = att.id();
             let stem = name.strip_suffix(".cbor").unwrap_or(&name);
             if stem != id {
-                report
-                    .store_drift
-                    .push((name.clone(), format!("bytes derive {id}, not their name — retained")));
+                report.store_drift.push((
+                    name.clone(),
+                    format!("bytes derive {id}, not their name — retained"),
+                ));
                 continue;
             }
             attestations.push(att);
@@ -530,16 +593,21 @@ pub fn audit(archive: &Archive) -> Result<AuditReport, String> {
             }
         }
         if !ok {
-            report
-                .store_drift
-                .push((format!("{id}.cbor"), "signature verification fails — retained".to_owned()));
+            report.store_drift.push((
+                format!("{id}.cbor"),
+                "signature verification fails — retained".to_owned(),
+            ));
             continue;
         }
         match content_report(att, &media) {
             ContentReport::Malformed(why) => {
-                report.store_drift.push((format!("{id}.cbor"), format!("{why} — retained")));
+                report
+                    .store_drift
+                    .push((format!("{id}.cbor"), format!("{why} — retained")));
             }
-            ContentReport::Detached { body_b3, status, .. } => {
+            ContentReport::Detached {
+                body_b3, status, ..
+            } => {
                 let h = hex(&body_b3);
                 match status {
                     BodyStatus::Verified => {
@@ -560,8 +628,10 @@ pub fn audit(archive: &Archive) -> Result<AuditReport, String> {
         }
     }
 
-    report.bodies_unreferenced =
-        body_hashes.iter().filter(|h| !referenced.contains(h)).count();
+    report.bodies_unreferenced = body_hashes
+        .iter()
+        .filter(|h| !referenced.contains(h))
+        .count();
     Ok(report)
 }
 
@@ -580,4 +650,186 @@ fn hex_to_hash(s: &str) -> Option<[u8; 32]> {
 /// deliveries by hash.
 pub fn key_for_hash(hash: &[u8; 32]) -> String {
     format!("z{}", bs58::encode(hash).into_string())
+}
+
+// ---- tests -----------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bundle::{make_bundle, media_key};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn scratch(tag: &str) -> PathBuf {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("comms-archive-{tag}-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for d in [
+            "store",
+            "bodies",
+            "views/sessions",
+            "views/keys",
+            "intake",
+            "genesis",
+        ] {
+            std::fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        dir
+    }
+
+    fn key(byte: u8) -> SigningKey {
+        SigningKey::from_bytes(&[byte; 32])
+    }
+
+    fn detached_member(body: &[u8], about: &str, sk: &SigningKey) -> Attestation {
+        let spec = ClaimSpec {
+            about,
+            kind: "testimony",
+            body,
+            media_type: "text/markdown",
+            detach: true,
+            support: &[],
+            refs: &[],
+            language: "zxx",
+            community: None,
+            occasion: Some("test"),
+            issued_at: "2026-07-06T00:00:00Z",
+        };
+        author_general_claim(&spec, sk, "author", "2026-07-06T00:00:01Z")
+    }
+
+    fn sealed_bundle(body: &[u8]) -> Bundle {
+        let member = detached_member(body, "letter/session-test", &key(1));
+        let mut media = HashMap::new();
+        media.insert(media_key(body), body.to_vec());
+        make_bundle(
+            vec![member],
+            media,
+            Some(&key(2)),
+            "test close bundle",
+            "2026-07-06T00:00:02Z",
+            "2026-07-06T00:00:03Z",
+            "2026-07-06T00:00:04Z",
+        )
+    }
+
+    #[test]
+    fn intake_bundle_ingests_by_id_and_hash_then_noops() {
+        let root = scratch("intake");
+        let archive = Archive::at(&root);
+        let bundle = sealed_bundle(b"# letter\nbody\n");
+        let bundle_path = root.join("intake").join("close.bundle");
+        std::fs::write(&bundle_path, bundle.to_cbor()).unwrap();
+
+        let report = intake_bundle(&archive, &bundle_path, &key(3)).unwrap();
+        assert_eq!(report.new_members.len(), 2, "member plus seal enter store");
+        assert_eq!(report.new_bodies.len(), 1);
+        assert!(report.custody_attestation.is_some());
+        let body_hash = report.new_bodies[0].clone();
+        assert!(archive.body_file(&body_hash).unwrap().is_file());
+        assert!(!report.views_regenerated.is_empty());
+        assert!(
+            std::fs::read_dir(archive.views().join("sessions"))
+                .unwrap()
+                .any(|e| e.unwrap().path().is_dir()),
+            "intake should regenerate a session view"
+        );
+
+        let again = intake_bundle(&archive, &bundle_path, &key(3)).unwrap();
+        assert!(again.is_noop(), "same bundle should not duplicate custody");
+        assert!(again.custody_attestation.is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn intake_refuses_unsealed_or_bad_media_without_partial_ingest() {
+        let root = scratch("refuse");
+        let archive = Archive::at(&root);
+        let body = b"body";
+        let member = detached_member(body, "letter", &key(1));
+        let unsealed = Bundle {
+            attestations: vec![member.clone()],
+            media: HashMap::new(),
+            manifest: None,
+        };
+        let unsealed_path = root.join("intake").join("unsealed.bundle");
+        std::fs::write(&unsealed_path, unsealed.to_cbor()).unwrap();
+        let err = intake_bundle(&archive, &unsealed_path, &key(3)).unwrap_err();
+        assert!(err.contains("no A1.8 seal"), "{err}");
+        assert!(std::fs::read_dir(archive.store()).unwrap().next().is_none());
+
+        let mut bad_media = HashMap::new();
+        bad_media.insert(
+            "z11111111111111111111111111111111".to_owned(),
+            b"not that hash".to_vec(),
+        );
+        let bad = make_bundle(
+            vec![member],
+            bad_media,
+            Some(&key(2)),
+            "bad media",
+            "2026-07-06T00:00:02Z",
+            "2026-07-06T00:00:03Z",
+            "2026-07-06T00:00:04Z",
+        );
+        let bad_path = root.join("intake").join("bad.bundle");
+        std::fs::write(&bad_path, bad.to_cbor()).unwrap();
+        let err = intake_bundle(&archive, &bad_path, &key(3)).unwrap_err();
+        assert!(err.contains("media blob"), "{err}");
+        assert!(std::fs::read_dir(archive.store()).unwrap().next().is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn audit_reports_absent_and_drift_without_deleting_bytes() {
+        let root = scratch("audit");
+        let archive = Archive::at(&root);
+        let body = b"keep me even when corrupted";
+        let bundle = sealed_bundle(body);
+        let bundle_path = root.join("intake").join("close.bundle");
+        std::fs::write(&bundle_path, bundle.to_cbor()).unwrap();
+        let report = intake_bundle(&archive, &bundle_path, &key(3)).unwrap();
+        let h = report.new_bodies[0].clone();
+
+        let clean = audit(&archive).unwrap();
+        assert_eq!(clean.bodies_drift.len(), 0);
+        assert_eq!(clean.bodies_absent.len(), 0);
+
+        let body_path = archive.body_file(&h).unwrap();
+        std::fs::write(&body_path, b"corrupted but retained").unwrap();
+        let drift = audit(&archive).unwrap();
+        assert_eq!(drift.bodies_drift.len(), 1);
+        assert!(body_path.is_file(), "audit must retain mismatched bytes");
+
+        std::fs::remove_file(&body_path).unwrap();
+        let absent = audit(&archive).unwrap();
+        assert!(absent.bodies_absent.iter().any(|(_, hash)| hash == &h));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn legacy_intake_hashes_testimony_and_attests_once() {
+        let root = scratch("legacy");
+        let archive = Archive::at(&root);
+        let source = root.join("legacy-input");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("note.txt"), b"found in the shoebox").unwrap();
+
+        let report = intake_legacy(&archive, &source, &key(3), "found in old contarchive").unwrap();
+        assert_eq!(report.new_bodies.len(), 1);
+        assert!(report.custody_attestation.is_some());
+        assert!(archive.body_file(&report.new_bodies[0]).unwrap().is_file());
+
+        let again = intake_legacy(&archive, &source, &key(3), "found in old contarchive").unwrap();
+        assert!(again.is_noop());
+        assert!(again.custody_attestation.is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

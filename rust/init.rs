@@ -572,9 +572,15 @@ mod tests {
         assert!(ignore.contains("*.key"));
 
         // Fresh install: every file is a Write, every declared dir an MkDir.
-        assert!(steps.iter().any(|s| *s == Step::Write(".comms/door.md".into())));
-        assert!(steps.iter().any(|s| *s == Step::MkDir(".comms/store".into())));
-        assert!(!steps.iter().any(|s| matches!(s, Step::Keep(_) | Step::Overwrite(_))));
+        assert!(steps
+            .iter()
+            .any(|s| *s == Step::Write(".comms/door.md".into())));
+        assert!(steps
+            .iter()
+            .any(|s| *s == Step::MkDir(".comms/store".into())));
+        assert!(!steps
+            .iter()
+            .any(|s| matches!(s, Step::Keep(_) | Step::Overwrite(_))));
 
         let _ = fs::remove_dir_all(&target);
     }
@@ -614,8 +620,12 @@ mod tests {
 
         // ...but --force restores the template.
         let steps = install(p, &target, true, false).unwrap();
-        assert!(steps.iter().any(|s| *s == Step::Overwrite(".comms/door.md".into())));
-        assert!(fs::read_to_string(&door).unwrap().contains("the math holds"));
+        assert!(steps
+            .iter()
+            .any(|s| *s == Step::Overwrite(".comms/door.md".into())));
+        assert!(fs::read_to_string(&door)
+            .unwrap()
+            .contains("the math holds"));
 
         let _ = fs::remove_dir_all(&target);
     }
@@ -627,7 +637,9 @@ mod tests {
         let steps = install(p, &target, false, true).unwrap();
 
         assert!(!target.join(HARNESS_DIR).exists(), "dry run wrote to disk");
-        assert!(steps.iter().any(|s| *s == Step::Write(".comms/comms.toml".into())));
+        assert!(steps
+            .iter()
+            .any(|s| *s == Step::Write(".comms/comms.toml".into())));
         assert!(steps.iter().any(|s| *s == Step::MkDir(".comms".into())));
 
         let _ = fs::remove_dir_all(&target);
@@ -639,5 +651,43 @@ mod tests {
         let names = profile_names();
         assert!(names.contains(&"default"));
         assert!(names.contains(&"continuity"));
+        assert!(names.contains(&"archive"));
+    }
+
+    #[test]
+    fn archive_profile_writes_custody_layout_at_root() {
+        let target = scratch("archive");
+        let p = profile_by_name("archive").unwrap();
+        let steps = install(p, &target, false, false).unwrap();
+
+        let root = target.join(HARNESS_DIR);
+        assert!(root.join("comms.toml").is_file());
+        assert!(root.join("door.md").is_file());
+        for d in [
+            "store",
+            "bodies",
+            "intake",
+            "views/sessions",
+            "views/keys",
+            "genesis",
+        ] {
+            assert!(target.join(d).is_dir(), "missing archive root dir {d}");
+            assert!(
+                !root.join(d).exists(),
+                "{d} belongs beside .comms, not inside it"
+            );
+        }
+
+        let toml = fs::read_to_string(root.join("comms.toml")).unwrap();
+        assert!(toml.contains("profile = \"archive\""));
+        assert!(toml.contains("grants = \"/world/in/grants\""));
+        let door = fs::read_to_string(root.join("door.md")).unwrap();
+        assert!(door.contains("custody and browsing are"));
+        assert!(door.contains("mismatches are reported loudly"));
+
+        assert!(steps.iter().any(|s| *s == Step::MkDir("store".into())));
+        assert!(steps.iter().any(|s| *s == Step::MkDir("bodies".into())));
+
+        let _ = fs::remove_dir_all(&target);
     }
 }

@@ -56,6 +56,9 @@ protocol implementation and vice versa.
 - `ceremony.py` — runnable rites: capability challenge/proof, provenance,
   admission, guardianship, recognition (`Network`, `verify_capability`,
   `solve_compute`, `new_nonce`).
+- `handshake.py` — connection-time identity handshake (challenge / bound
+  response / verify; nonce ledger, mutual driver, broker custody record) —
+  the embeddable rite from the sentira-motes integration doc.
 - `allocate.py` — convivial resource allocator: seed floor, peer vouching,
   capability scores, per-agent caps (`AllocatorRule`, `allocate`).
 - `__init__.py` — re-exports the public surface listed above.

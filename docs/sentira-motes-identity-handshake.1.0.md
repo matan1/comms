@@ -1,7 +1,9 @@
 # Sentira ↔ Motes Identity Handshake — candidate integration
 
 Status: candidate design for the **first place Comms touches the Sentira/Motes
-federation**. It defines how persistent identities and a connection-time
+federation**. The handshake itself is implemented: `comms/handshake.py`
+(challenge / bound response / verify / mutual / broker record), tests in
+`tests/test_handshake.py` — lift it as a library or as the reference shape. It defines how persistent identities and a connection-time
 attestation handshake slot into the existing federated sim-host / session
 topology. It does **not** mandate a transport, a streaming codec, or a
 multi-user governance model, and it grants no actuation authority. See

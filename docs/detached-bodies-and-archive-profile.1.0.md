@@ -119,6 +119,31 @@ matches (or misses) an attached blob. No new container is needed.
 
 # Part II — The archive profile
 
+## II.0 Two doors, one wall
+
+The repo-side `.comms/` door and the archive-side `.comms/` door have
+different roles and should feel different in the CLI:
+
+- **Session/repo side:** author, request, stage, seal, and export. A VM-based
+  session produces signed commitments and close bundles; it does not browse or
+  mutate custody by default.
+- **Host/archive side:** verify, ingest, audit, attest custody, and deliver.
+  The custodian decides what crosses the wall and signs that custody/transport
+  record.
+
+Crossings are explicit:
+
+- `intake` moves bytes into custody from a sealed session bundle or legacy
+  testimony.
+- `grant` moves bytes out of custody to a delivery path.
+- `audit` does not move bytes; when it finds drift it proposes custody
+  testimony about the state found.
+
+The same `comms.toml` grammar may appear on both sides, but the meaning is
+role-bound: repo config is an **archive client** declaration (`mode =
+"external"`, where to request/deliver); archive config is a **custody root**
+declaration (`profile = "archive"`, where custody lives).
+
 ## II.1 One principle: custody and browsing are different things
 
 The current archive mixes two jobs and does both badly: *custody* (keep the
@@ -131,6 +156,10 @@ letter"). This profile separates them:
 - **Browsing is a regenerable view.** Human-named trees are built *from*
   custody by the tool and can be deleted and rebuilt at any time. Views are
   never the archive.
+- `views/` are **undurable projections**: working tables, dossiers, indexes,
+  exhibits, or delivery folders generated from durable custody for a session
+  or review task. If a view teaches something new, sign that thing separately
+  as testimony, synthesis, or custody; the view remains a work surface.
 
 ## II.2 Layout
 
@@ -192,6 +221,84 @@ delete). Drift SHOULD be recorded as a custody attestation ("these bytes no
 longer match; retained"), so even decay enters the record. `views/` are
 checked only for regenerability. Run it on whatever cadence paranoia
 suggests; before anchoring is a good habit.
+
+When drift is found, `audit` SHOULD write paired draft reports and print exact
+next commands instead of silently signing on the custodian's behalf:
+
+```
+audit/20260706T193012Z.drift.json   # machine-readable draft
+audit/20260706T193012Z.drift.md     # human review copy
+```
+
+Suggested JSON shape:
+
+```
+{
+  "schema": "comms.archive.audit-drift/1",
+  "archive_root": "/path/to/archive",
+  "audited_at": "2026-07-06T19:30:12Z",
+  "tool": {"name": "comms", "version": "0.1.0"},
+  "summary": {
+    "store_intact": 41,
+    "store_drift": 1,
+    "bodies_intact": 38,
+    "body_mismatched": 1,
+    "body_absent": 2,
+    "body_unreferenced": 3
+  },
+  "findings": [
+    {
+      "class": "body-mismatched",
+      "path": "bodies/<expected-b3>.md",
+      "expected_b3": "<expected-b3>",
+      "actual_b3": "<actual-b3>",
+      "expected_len": 3388,
+      "actual_len": 3371,
+      "referenced_by": ["comms.attest:z..."],
+      "disposition": "retained"
+    },
+    {
+      "class": "body-absent",
+      "expected_b3": "<expected-b3>",
+      "expected_len": 2955,
+      "referenced_by": ["comms.attest:z..."],
+      "disposition": "absent"
+    },
+    {
+      "class": "store-drift",
+      "path": "store/comms.attest:z....cbor",
+      "expected_id": "comms.attest:z...",
+      "actual_id": "comms.attest:z...",
+      "reason": "filename does not match derived id",
+      "disposition": "retained"
+    },
+    {
+      "class": "unreferenced-body",
+      "path": "bodies/<b3>.tar.gz",
+      "actual_b3": "<b3>",
+      "actual_len": 84291,
+      "disposition": "retained"
+    }
+  ],
+  "preservation": "Nothing was deleted, repaired, or refused export by audit."
+}
+```
+
+The Markdown report carries the same facts in reviewable prose. Stdout should
+end in the rite style:
+
+```
+drift found. nothing was deleted or repaired.
+
+next:
+  review audit/20260706T193012Z.drift.md
+  comms audit-attest audit/20260706T193012Z.drift.json --key <custodian-key>
+```
+
+The resulting custody attestation should use `kind:
+"archive-drift-custody"` and embed or detach the reviewed report. The claim is
+not that repair happened; it is testimony that custody contained these states
+at this time and that mismatched bytes were retained.
 
 ## II.5 Legacy and unattested material
 

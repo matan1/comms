@@ -89,10 +89,10 @@ fn usage_text() -> String {
          \x20 pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]\n\
          \x20 extract <bundle> --out <dir>     write members and media to files\n\
          \x20 intake  <bundle|dir> [root] --key <k> [--legacy --provenance S]\n\
-         \x20         archive custody: verify, ingest by id/hash, regenerate views,\n\
-         \x20         attest custody (idempotent; archive profile)\n\
+         \x20         host/archive side: verify, ingest by id/hash, regenerate\n\
+         \x20         undurable views, attest custody (idempotent)\n\
          \x20 audit   [root]                   re-derive every id and hash in custody;\n\
-         \x20         mark drift, never delete (archive profile)\n\
+         \x20         mark drift, never delete; suggest custody testimony\n\
          \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
          \x20 waive   <type> [dir] --body <reason>   record that this session cannot\n\
          \x20         produce a required artifact (the gap becomes an attestation)\n\
@@ -122,8 +122,8 @@ fn help_for(cmd: &str) -> String {
         "seal" => "comms seal <bundle> --key <k.json> [--out P] [--description S] [--created-at T] [--issued-at T] [--signed-at T]\n  Add an A1.8 integrity seal (signs the exact member set).\n",
         "pack" => "comms pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
         "extract" => "comms extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
-        "intake" => "comms intake <bundle|file|dir> [archive-root] --key <custodian key> \\\n    [--legacy --provenance \"...\"]\n  The custodian's one verb at closeout (archive profile): verify the bundle's\n  seal/members/media, ingest members by id and bodies by hash (idempotent),\n  regenerate views/ for the affected sessions, and attest custody. --legacy\n  takes unattested material in as testimony, by hash, honestly labeled.\n",
-        "audit" => "comms audit [archive-root]\n  Walk store/ and bodies/, re-derive every id and hash, and report intact /\n  absent / mismatched. Drift is marked, never deleted (preservation stance).\n",
+        "intake" => "comms intake <bundle|file|dir> [archive-root] --key <custodian key> \\\n    [--legacy --provenance \"...\"]\n  Host/archive-side crossing: verify a sealed session bundle, ingest members by\n  id and bodies by hash (idempotent), regenerate undurable views/ for browsing,\n  and attest custody. --legacy takes unattested material in as testimony, by\n  hash, honestly labeled.\n",
+        "audit" => "comms audit [archive-root]\n  Host/archive-side custody check: walk store/ and bodies/, re-derive every id\n  and hash, and report intact / absent / mismatched. Drift is marked, never\n  deleted. On drift, audit should propose a reviewed custody attestation draft.\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
         "waive" => "comms waive <type> [dir] --body <reason file|->\n  Record a session-signed waiver: this session cannot produce a declared\n  `required_for` artifact, and says so on the record instead of being blocked.\n  Only rites with `allow_waivers = true` accept it at seal.\n",
         "sign" => "comms sign --key <path> [--pending DIR]\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. Needs naming other keys are left\n  standing. Default DIR: .comms/pending or continuity/pending, whichever has\n  staged items.\n",

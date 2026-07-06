@@ -214,6 +214,22 @@ fn decision_output(comms_dir: &Path, rite: &Rite, verb: &str, target: &str) -> P
     comms_dir.join("store").join(name)
 }
 
+/// Resolve the recorded request id for a rite target. Used by host-side
+/// delivery after a grant has already been recorded: the transport still lands
+/// under the request id even when it is no longer part of `comms next`.
+pub fn recorded_request_id(comms_dir: &Path, rite: &Rite, target: &str) -> Result<String, String> {
+    let request_path = decision_output(comms_dir, rite, "request", target);
+    let request_bytes = std::fs::read(&request_path).map_err(|_| {
+        format!(
+            "no request on record at {} — record the request before delivery",
+            request_path.display()
+        )
+    })?;
+    parse_attestation(&request_bytes)
+        .map_err(|e| format!("{}: {e}", request_path.display()))
+        .map(|att| att.id())
+}
+
 /// Where a recorded waiver for an artifact type lands. Session-scoped like
 /// every other attest output.
 fn waiver_output(comms_dir: &Path, rite: &Rite, type_name: &str) -> PathBuf {
@@ -822,16 +838,7 @@ pub fn execute_step(
             let sk = signing::load_signing_key(key)?;
             let target = step.target.as_deref().unwrap_or("archive");
 
-            let request_path = decision_output(comms_dir, rite, "request", target);
-            let request_bytes = std::fs::read(&request_path).map_err(|_| {
-                format!(
-                    "no request on record at {} — `request` comes first",
-                    request_path.display()
-                )
-            })?;
-            let request_id = parse_attestation(&request_bytes)
-                .map_err(|e| format!("{}: {e}", request_path.display()))?
-                .id();
+            let request_id = recorded_request_id(comms_dir, rite, target)?;
 
             // Grant is delivery (detached-bodies design II.6): with
             // --deliver, the requested body is resolved from the archive and
@@ -895,7 +902,7 @@ pub fn execute_step(
 /// is an attestation id (its detached commitment names the bytes) or a bare
 /// 64-hex blake3. Returns the note the grant attestation carries, so the
 /// record names exactly what was delivered where.
-fn deliver_body(comms_dir: &Path, target_ref: &str, request_id: &str) -> Result<String, String> {
+pub fn deliver_body(comms_dir: &Path, target_ref: &str, request_id: &str) -> Result<String, String> {
     let cfg = config::load(comms_dir)?;
     let repo_root = comms_dir.parent().unwrap_or(Path::new("."));
     let archive_rel = cfg.archive_path.as_deref().ok_or_else(|| {
@@ -1706,5 +1713,94 @@ steps = ["request archive", "grant archive"]
         assert!(note.contains(delivered.to_str().unwrap()), "{note}");
         assert!(note.contains(&h_hex), "{note}");
         assert_eq!(dec.signatures[0].by, gid);
+    }
+
+    #[test]
+    fn delivery_can_follow_an_already_recorded_grant() {
+        use crate::archive::Archive;
+        use crate::bundle::author_general_claim;
+
+        let comms = scratch("postgrantdeliver");
+        let repo = comms.parent().unwrap().to_path_buf();
+        let archive_root = repo.join("archive");
+        for d in ["store", "bodies", "views/sessions", "views/keys", "intake", "genesis"] {
+            std::fs::create_dir_all(archive_root.join(d)).unwrap();
+        }
+        let grants = repo.join("grants");
+
+        let guardian = keyfile::mint(&comms.join("guardian.json"), "guardian").unwrap();
+        let toml_text = format!(
+            r#"
+profile = "continuity"
+[archive]
+path = "{}"
+grants = "{}"
+[rites.open]
+steps = ["mint session"]
+[rites.archive]
+steps = ["request archive", "grant archive"]
+"#,
+            archive_root.display(),
+            grants.display()
+        );
+        std::fs::write(comms.join("comms.toml"), &toml_text).unwrap();
+        let cfg = HarnessConfig::from_toml(&config::parse(&toml_text).unwrap());
+        let open = cfg.rite("open").unwrap();
+        let archive_rite = cfg.rite("archive").unwrap();
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+
+        let body = b"delivery after grant\n";
+        let spec = ClaimSpec {
+            about: "letter/session-postgrant",
+            kind: "testimony",
+            body,
+            media_type: "text/markdown",
+            detach: true,
+            support: &[],
+            refs: &[],
+            language: "zxx",
+            community: None,
+            occasion: Some("test"),
+            issued_at: "2026-07-06T00:00:00Z",
+        };
+        let letter = author_general_claim(&spec, &guardian, "author", "2026-07-06T00:00:01Z");
+        let letter_id = letter.id();
+        let archive = Archive::at(&archive_root);
+        std::fs::write(
+            archive.store().join(format!("{letter_id}.cbor")),
+            letter.to_cbor(),
+        )
+        .unwrap();
+        let h_hex = crate::archive::hex(blake3::hash(body).as_bytes());
+        std::fs::write(archive.bodies().join(format!("{h_hex}.md")), body).unwrap();
+
+        let ask = ExecInputs {
+            body: Some(b"please grant, delivery may follow".to_vec()),
+            ..Default::default()
+        };
+        execute_step(&comms, archive_rite, &archive_rite.steps[0], &ask).unwrap();
+        let request_id = recorded_request_id(&comms, archive_rite, "archive").unwrap();
+        let grant = ExecInputs {
+            key: Some(comms.join("guardian.json")),
+            decision: Some("grant"),
+            ..Default::default()
+        };
+        execute_step(&comms, archive_rite, &archive_rite.steps[1], &grant).unwrap();
+        assert!(
+            rite_view(&comms, archive_rite).complete(),
+            "the grant rite should now be complete"
+        );
+
+        let note = deliver_body(&comms, &letter_id, &request_id).unwrap();
+        let req_tag: String = request_id
+            .strip_prefix("comms.attest:")
+            .unwrap()
+            .chars()
+            .take(16)
+            .collect();
+        let delivered = grants.join(req_tag).join("letter-session-postgrant.md");
+        assert_eq!(std::fs::read(&delivered).unwrap(), body);
+        assert!(note.contains(delivered.to_str().unwrap()), "{note}");
+        assert!(note.contains(&h_hex), "{note}");
     }
 }

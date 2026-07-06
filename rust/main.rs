@@ -53,6 +53,7 @@ fn main() {
         Some("seal") => cmd_seal(&argv[1..]),
         Some("pack") => cmd_pack(&argv[1..]),
         Some("extract") => cmd_extract(&argv[1..]),
+        Some("deliver") => cmd_deliver(&argv[1..]),
         Some("intake") => cmd_intake(&argv[1..]),
         Some("audit") => cmd_audit(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
@@ -88,6 +89,8 @@ fn usage_text() -> String {
          \x20 seal    <bundle> --key <k> [--out <p>] [--description S] [--*-at T]\n\
          \x20 pack    --out <bundle> <att.cbor|dir>... [--media F]... [--seal --key <k>]\n\
          \x20 extract <bundle> --out <dir>     write members and media to files\n\
+         \x20 deliver <attestation-id|body-b3> [dir] [--request ID]\n\
+         \x20         host/archive side: copy a granted body to the request delivery path\n\
          \x20 intake  <bundle|dir> [root] --key <k> [--legacy --provenance S]\n\
          \x20         host/archive side: verify, ingest by id/hash, regenerate\n\
          \x20         undurable views, attest custody (idempotent)\n\
@@ -122,6 +125,7 @@ fn help_for(cmd: &str) -> String {
         "seal" => "comms seal <bundle> --key <k.json> [--out P] [--description S] [--created-at T] [--issued-at T] [--signed-at T]\n  Add an A1.8 integrity seal (signs the exact member set).\n",
         "pack" => "comms pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
         "extract" => "comms extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
+        "deliver" => "comms deliver <attestation-id|body-b3-hex> [repo-root] [--request ID]\n  Host/archive-side transport after a grant: resolve a detached body from the\n  configured archive, copy it to the grants/<request-id>/ delivery path, and\n  print the exact path and hash. If --request is omitted, uses this session's\n  recorded archive request from the continuity rite.\n",
         "intake" => "comms intake <bundle|file|dir> [archive-root] --key <custodian key> \\\n    [--legacy --provenance \"...\"]\n  Host/archive-side crossing: verify a sealed session bundle, ingest members by\n  id and bodies by hash (idempotent), regenerate undurable views/ for browsing,\n  and attest custody. --legacy takes unattested material in as testimony, by\n  hash, honestly labeled.\n",
         "audit" => "comms audit [archive-root]\n  Host/archive-side custody check: walk store/ and bodies/, re-derive every id\n  and hash, and report intact / absent / mismatched. Drift is marked, never\n  deleted. On drift, audit should propose a reviewed custody attestation draft.\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
@@ -939,6 +943,29 @@ fn cmd_extract(args: &[String]) {
         bundle.media.len(),
         plural(bundle.media.len()),
     );
+}
+
+fn cmd_deliver(args: &[String]) {
+    let o = parse_opts(args);
+    let target_ref = o
+        .positionals
+        .first()
+        .map(String::as_str)
+        .unwrap_or_else(|| die("usage: comms deliver <attestation-id|body-b3-hex> [repo-root] [--request ID]"));
+    let comms_dir = resolve_comms_dir(o.positionals.get(1).map(String::as_str));
+    let cfg = config::load(&comms_dir).unwrap_or_else(|e| die(e));
+    let archive_rite = cfg
+        .rite("archive")
+        .unwrap_or_else(|| die("no rite 'archive' declared in comms.toml"));
+    let request_id = match o.get("--request") {
+        Some(id) => id.to_owned(),
+        None => rites::recorded_request_id(&comms_dir, archive_rite, "archive")
+            .unwrap_or_else(|e| die(e)),
+    };
+    let note = rites::deliver_body(&comms_dir, target_ref, &request_id)
+        .unwrap_or_else(|e| die(format!("delivery refused: {e}")));
+    println!("delivered for request {request_id}{}", note.trim_end());
+    println!("requester should verify the received bytes against the printed blake3 before relying on them.");
 }
 
 // ---- intake / audit (the archive profile's custody verbs) -------------------

@@ -169,6 +169,7 @@
         </aside>
 
         <section class="stage" id="mapStage" aria-label="Village map">
+          <div id="modernStage" class="modern-stage" hidden></div>
           <canvas id="worldCanvas"></canvas>
           <div id="inspector" class="inspector" hidden></div>
         </section>
@@ -203,5 +204,7 @@
     <script src="./harbor.js"></script>
     <script src="./render.js"></script>
     <script src="./ui.js"></script>
+    <script src="./legacy-bridge.js"></script>
+    <script type="module" src="./app/main.ts"></script>
   </body>
 </html>

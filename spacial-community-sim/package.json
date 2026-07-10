@@ -1,0 +1,32 @@
+{
+  "name": "spacial-community-sim",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Viewer-relative spatial community simulator and projection shell",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "npm run test:models && npm run test:legacy",
+    "test:models": "vitest run",
+    "test:legacy": "node --test tests/legacy-kernel-contract.test.mjs",
+    "test:browser": "node --test tests/browser-shell.test.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cytoscape": "^3.34.0",
+    "pixi.js": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "playwright": "^1.61.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  }
+}

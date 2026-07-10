@@ -2,6 +2,8 @@ __pycache__/
 .venv/
 rust/target/
 .pytest_cache/
+node_modules/
+dist/
 continuity/session.key
 continuity/session-signing.key
 continuity/session-signing.key.pub

@@ -1,11 +1,14 @@
 # Comms Village — spatial community simulator (prototype 2)
 
 A reimagining of `community-sim/` around **literal space and partial
-knowledge**. Static browser demo: no build, no dependencies, deterministic
-under a seeded PRNG. Open `index.html` directly or serve:
+knowledge**. The simulation remains deterministic and headless-testable; its
+new projection shell uses TypeScript, PixiJS, and Cytoscape.js.
+
+Use Node 20.19 or newer:
 
 ```sh
-python3 -m http.server 8080
+npm install
+npm run dev
 ```
 
 ## Three complementary maps
@@ -32,6 +35,18 @@ recognized law. The first scenario includes an intact bundle with a missing
 body, a valid opaque proposal flood, a useful clarification, both directions
 of host-enforcement divergence, contested policy succession, and a surviving
 exit community.
+
+Select **World → Archive Harbor**, then choose:
+
+- **Geography & couriers** for the PixiJS spatial projection;
+- **Evidence & body availability** for the Cytoscape.js graph projection;
+- custody, pending, authority, or participant law for the legacy projections
+  retained during the incremental migration.
+
+Pixi and Cytoscape are lazy-loaded only when their projection is selected.
+Both consume typed, plain-data projection models rather than mutable simulator
+state. The compatibility bridge exposes a structured-cloneable snapshot while
+the classic kernel remains the behavioral authority for this first spike.
 
 The workstation map is not a cosmetic reskin. It has a 24 GB accelerator
 envelope, service-specific model profiles, remote-call failures, host buses,
@@ -77,6 +92,14 @@ Run the 25-seed Archive Harbor acceptance harness:
 
 ```sh
 cat world.js sim.js harbor.js render.js ui.js archive-harbor-test.js | node
+```
+
+Run the new projection, kernel-contract, and production-browser checks:
+
+```sh
+npm test
+npm run build
+npm run test:browser  # requires: npx playwright install chromium
 ```
 
 ## What it models
@@ -175,6 +198,16 @@ sim.js      villagers, attestations, beliefs, phases, gossip, metrics
 harbor.js   optional plural-law evidence lifecycle and Harbor harness state
 render.js   canvas painting, pulses, walking animation
 ui.js       DOM wiring, controls, inspector, frame loop
+```
+
+The migration shell adds:
+
+```text
+app/kernel/         renderer-independent kernel facade
+app/models/         versioned snapshot and projection contracts
+app/projections/    pure participant-safe projection functions
+app/renderers/      PixiJS geography and Cytoscape evidence adapters
+app/shell/          projection selection and legacy fallback
 ```
 
 `seedState(p)`, `advanceDay(p)`, `nextPhase(p)`, and `normalizeParams(raw)`

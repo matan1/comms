@@ -256,6 +256,7 @@ function renderStatic() {
 
   renderLog();
   renderInspector();
+  if (hasDom) window.dispatchEvent(new CustomEvent("comms:statechange"));
 }
 
 function renderHarborSummary() {

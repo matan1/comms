@@ -50,6 +50,19 @@ visible in the full projection.
 
 It does not recommend an order or a guide.
 
+The sole authored exception is an optional threshold line supplied by the
+archive custodian. It is explicitly labeled as the custodian's voice, limited
+to 256 UTF-8 bytes, and contains no newline or control character. It does not
+enter the inventory snapshot commitment. Its provenance is archive
+configuration and therefore unsigned unless a containing milestone manifest
+is later attested. This permits one human breath at the threshold without
+turning the minimal projection into an archive summary.
+
+```toml
+[manifest]
+custodian_line = "You may choose how I address you now, later, or not at all."
+```
+
 ### 2.2 Full projection
 
 Level `full` adds the sorted inventory, exact duplicate groups, relationships

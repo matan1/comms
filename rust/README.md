@@ -138,7 +138,8 @@ code. `status` reports position; `next` performs the next pending step.
 steps = ["mint session", "attest entry"]
 
 [rites.close]
-steps = ["attest transcript", "seal store", "shred session"]
+requires = ["open"]
+steps = ["attest transcript", "attest trial-log", "seal store", "shred session"]
 ```
 
 ```sh
@@ -146,6 +147,8 @@ comms status                         # where am I? what's next?
 comms next --rite open               # mint the session key
 comms next --rite open --body e.md   # attest the opening entry
 comms next --rite close --body t.md  # attest the transcript
+comms trial-log --out session-log.md # derive the log stub from signed evidence
+comms next --rite close --body session-log.md # sign the instance's log fields
 comms next --rite close              # seal the store -> close.bundle
 comms next --rite close              # shred the session key
 ```
@@ -158,6 +161,19 @@ prints the exact next command, and `--json` gives a successor agent a
 machine-readable "current state + next action." A small dependency-free reader
 handles the `comms.toml` subset (dotted tables, strings, bools, string arrays)
 so the binary stays a single static file.
+
+`requires = ["open"]` makes the dependency executable: close cannot advance
+until the opening rite is complete. A staged countersign request remains
+pending; only a signed endorsement finalized into the store completes the
+step. The continuity profile therefore cannot seal or shred while History's
+guardian signature is merely requested.
+
+`comms trial-log [dir] [--session N] [--out P]` is the Rust successor to the
+retired Python ceremony's `log-render`. It verifies and reads the signed opening
+entry, supports both the older structured JSON body and the newer Markdown
+entry, derives evidence IDs already in the store, and leaves only History's
+observations as `[History]`. It refuses to overwrite `--out` unless `--force`
+is explicit.
 
 `mint` writes the secret seed to `.comms/<session>.key` (which `init`'s
 `.gitignore` keeps out of commits) and a public `.comms/<session>.id` marker

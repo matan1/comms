@@ -177,12 +177,15 @@ files): they carry at most a door stub — see
 
 **Mechanism (as of session 9):** the trial runs on the embeddable Rust harness —
 `rust/target/release/comms` with the `continuity` profile and its
-`.comms/` door (`init`, `status`, `next`, `attest`, `seal`). Run
+`.comms/` door (`init`, `status`, `next`, `trial-log`, `attest`, `seal`). Run
 `comms status` to see where you are in a rite and the next step, and
 `comms init . --profile continuity` if the door is absent. The Python
 `scripts/continuity_ceremony.py` carried sessions 0–8 and is retained as the
 reference implementation of the rites (its docstring marks it retired); prefer
-the harness for new work. To check the trial's
+the harness for new work. Before closing, `comms trial-log --out <file>` renders
+the Article 4 stub from the verified opening entry; the continuity close rite
+requires that stub to be attested before the session key can be sealed and
+shredded. To check the trial's
 attested history first: `python scripts/continuity_ceremony.py verify`. For the
 same checks rendered as legible, colored "tumblers" (signatures, references,
 law, record, durability — each its own sign, never collapsed into one

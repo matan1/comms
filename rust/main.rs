@@ -58,6 +58,7 @@ fn main() {
         Some("audit") => cmd_audit(&argv[1..]),
         Some("catalog") => cmd_catalog(&argv[1..]),
         Some("manifest") => cmd_manifest(&argv[1..]),
+        Some("trial-log") => cmd_trial_log(&argv[1..]),
         Some("pending") => cmd_pending(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
         Some("waive") => cmd_waive(&argv[1..]),
@@ -102,6 +103,8 @@ fn usage_text() -> String {
          \x20 catalog <path> [--json]          inventory an archive without changing it\n\
          \x20 manifest <path> [--level minimal|full] [--out P]\n\
          \x20         deterministic archive disclosure; never injected context\n\
+         \x20 trial-log [dir] [--session N] [--out P] [--force]\n\
+         \x20         render a Continuity Trial log stub from signed store evidence\n\
          \x20 pending list|inspect|state|clarify ...  appraise proposed acts\n\
          \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
          \x20 waive   <type> [dir] --body <reason>   record that this session cannot\n\
@@ -138,6 +141,7 @@ fn help_for(cmd: &str) -> String {
         "audit" => "comms audit [archive-root]\n  Host/archive-side custody check: walk store/ and bodies/, re-derive every id\n  and hash, and report intact / absent / mismatched. Drift is marked, never\n  deleted. On drift, audit should propose a reviewed custody attestation draft.\n",
         "catalog" => "comms catalog <path> [--json]\n  Read-only inventory of any archive-shaped or legacy directory. Hashes and\n  classifies regular files, counts text lines by top-level category, and\n  reports exact duplicate groups. Follows no symlinks and writes nothing.\n",
         "manifest" => "comms manifest <path> [--level minimal|full] [--out P]\n  Generate a deterministic archive view. Minimal discloses only aggregate\n  structure and health; full adds artifact metadata, relationships, duplicates,\n  and gaps. Generation is automatic-capable, but inspection remains chosen.\n",
+        "trial-log" => "comms trial-log [repo-root] [--session N] [--out P] [--force]\n  Render a Continuity Trial log stub from a verified, session-signed opening\n  entry. Auto-fills evidence IDs and leaves History's observations as [History].\n  Output is stdout unless --out is given; existing files require --force.\n",
         "pending" => "comms pending list [DIR]... [--json]\ncomms pending inspect <stem|id> [DIR]... [--json]\ncomms pending state <stem|id> --state S [--pending DIR]\ncomms pending clarify <stem|id> --body F --key K [--pending DIR] [--store DIR]\n  Discover and appraise proposed signing acts without conflating inboxes.\n  Clarification creates a signed question and leaves the pending core unchanged.\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
         "waive" => "comms waive <type> [dir] --body <reason file|->\n  Record a session-signed waiver: this session cannot produce a declared\n  `required_for` artifact, and says so on the record instead of being blocked.\n  Only rites with `allow_waivers = true` accept it at seal.\n",
@@ -401,6 +405,18 @@ fn step_hint(step: &comms_core::config::Step) -> &'static str {
     }
 }
 
+fn blocked_by(comms_dir: &std::path::Path, cfg: &HarnessConfig, rite: &comms_core::config::Rite) -> Vec<String> {
+    rite.requires
+        .iter()
+        .filter(|name| {
+            cfg.rite(name)
+                .map(|required| !rites::rite_view(comms_dir, required).complete())
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect()
+}
+
 fn cmd_status(args: &[String]) {
     let o = parse_opts(args);
     let comms_dir = resolve_comms_dir(o.positionals.first().map(String::as_str));
@@ -430,6 +446,10 @@ fn cmd_status(args: &[String]) {
             if here { " *" } else { "" },
             if v.complete() { "complete" } else { "in progress" }
         );
+        let blockers = blocked_by(&comms_dir, &cfg, r);
+        if !blockers.is_empty() {
+            println!("    ! blocked by incomplete rite(s): {}", blockers.join(", "));
+        }
         for (i, sv) in v.steps.iter().enumerate() {
             let glyph = if sv.done {
                 "✓"
@@ -479,8 +499,13 @@ fn cmd_status(args: &[String]) {
         Some((r, v)) => {
             if let Some(i) = v.next {
                 let step = &r.steps[i];
-                println!("\nnext: {} → {}", r.name, step.display());
-                println!("  run: comms next --rite {}{}", r.name, step_hint(step));
+                let blockers = blocked_by(&comms_dir, &cfg, r);
+                if blockers.is_empty() {
+                    println!("\nnext: {} → {}", r.name, step.display());
+                    println!("  run: comms next --rite {}{}", r.name, step_hint(step));
+                } else {
+                    println!("\nblocked: {} requires completed rite(s): {}", r.name, blockers.join(", "));
+                }
             }
         }
         None => println!("\nall declared rites complete."),
@@ -497,9 +522,12 @@ fn status_json(
         .iter()
         .map(|r| {
             let v = rites::rite_view(comms_dir, r);
+            let blockers = blocked_by(comms_dir, cfg, r);
             serde_json::json!({
                 "name": r.name,
                 "complete": v.complete(),
+                "requires": r.requires,
+                "blocked_by": blockers,
                 "steps": v.steps.iter().enumerate().map(|(i, s)| serde_json::json!({
                     "step": s.step.display(),
                     "verb": s.step.verb,
@@ -514,10 +542,17 @@ fn status_json(
         let v = rites::rite_view(comms_dir, r);
         v.next.map(|i| {
             let step = &r.steps[i];
+            let blockers = blocked_by(comms_dir, cfg, r);
+            let command = if blockers.is_empty() {
+                Some(format!("comms next --rite {}{}", r.name, step_hint(step)))
+            } else {
+                None
+            };
             serde_json::json!({
                 "rite": r.name,
                 "step": step.display(),
-                "command": format!("comms next --rite {}{}", r.name, step_hint(step)),
+                "blocked_by": blockers,
+                "command": command,
             })
         })
     });
@@ -1158,6 +1193,33 @@ fn cmd_manifest(args: &[String]) {
     } else {
         println!("{rendered}");
     }
+}
+
+fn cmd_trial_log(args: &[String]) {
+    let o = parse_opts(args);
+    let comms_dir = resolve_comms_dir(o.positionals.first().map(String::as_str));
+    let session = o.get("--session").map(|value| {
+        value
+            .parse::<u64>()
+            .unwrap_or_else(|_| die(format!("--session must be a non-negative integer, got '{value}'")))
+    });
+    let rendered = comms_core::trial_log::render(&comms_dir, session).unwrap_or_else(|e| die(e));
+    let Some(out) = o.get("--out") else {
+        print!("{rendered}");
+        return;
+    };
+    let path = std::path::Path::new(out);
+    if path.exists() && !o.has("--force") {
+        die(format!("{} already exists; pass --force to replace it", path.display()));
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|e| die(format!("cannot create {}: {e}", parent.display())));
+    }
+    std::fs::write(path, rendered.as_bytes())
+        .unwrap_or_else(|e| die(format!("cannot write {}: {e}", path.display())));
+    println!("trial-log stub -> {}", path.display());
+    println!("review it, then attest it before close: comms next --rite close --body {}", path.display());
 }
 
 // ---- mint ------------------------------------------------------------------

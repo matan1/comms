@@ -295,6 +295,7 @@ pub fn record_waiver(
             verb: "mint".to_owned(),
             target: Some("session".to_owned()),
         }],
+        requires: Vec::new(),
         allow_waivers: false,
     };
     let sk = session_signer(comms_dir, &rite)?;
@@ -397,12 +398,9 @@ pub fn step_done(comms_dir: &Path, rite: &Rite, step: &Step) -> bool {
         // mode, from the holder's environment. A seed still reachable anywhere
         // is not destroyed, and the step says so.
         Some(out) if step.verb == "shred" => !out.exists() && !env_seed_matches(comms_dir, rite),
-        // countersign is done once staged (the counterparty's signature is
-        // their act, tracked as an outstanding need) — or once their
-        // endorsement has been finalized into the store and staging cleared.
-        Some(out) if step.verb == "countersign" => {
-            out.exists() || countersign_recorded(comms_dir, rite)
-        }
+        // Staging is a request, not the counterparty's act. The step completes
+        // only once the signed endorsement has been finalized into the store.
+        Some(_) if step.verb == "countersign" => countersign_recorded(comms_dir, rite),
         Some(out) => out.exists(),
         None => false,
     }
@@ -516,6 +514,26 @@ pub fn execute_step(
     step: &Step,
     inputs: &ExecInputs,
 ) -> Result<ExecOutcome, String> {
+    if let Ok(cfg) = config::load(comms_dir) {
+        let incomplete: Vec<_> = rite
+            .requires
+            .iter()
+            .filter(|name| {
+                cfg.rite(name)
+                    .map(|required| !rite_view(comms_dir, required).complete())
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        if !incomplete.is_empty() {
+            return Err(format!(
+                "rite '{}' requires completed rite(s) [{}] before '{}' may advance",
+                rite.name,
+                incomplete.join(", "),
+                step.display()
+            ));
+        }
+    }
     let now = now_rfc3339();
     match step.verb.as_str() {
         "mint" => {
@@ -721,6 +739,17 @@ pub fn execute_step(
             })?;
             let session_id = session_id(comms_dir, rite)
                 .ok_or_else(|| "no session id on disk — `mint` first".to_owned())?;
+            let out = countersign_output(comms_dir, rite);
+            if out.exists() {
+                return Ok(ExecOutcome {
+                    message: format!(
+                        "already staged at {}; awaiting the configured counterparty's signature",
+                        out.display()
+                    ),
+                    output: Some(out),
+                    secret: None,
+                });
+            }
 
             let claim = vec![
                 (Value::text("t"), Value::text("endorsement/1")),
@@ -763,7 +792,6 @@ pub fn execute_step(
                 core,
                 signatures: Vec::new(),
             };
-            let out = countersign_output(comms_dir, rite);
             let stem = out
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -1291,10 +1319,10 @@ steps = ["request archive", "grant archive"]
         assert!(!step_done(&comms, open, &open.steps[2]));
         execute_step(&comms, open, &open.steps[2], &ExecInputs::default()).unwrap();
         assert!(
-            step_done(&comms, open, &open.steps[2]),
-            "staged counts as done"
+            !step_done(&comms, open, &open.steps[2]),
+            "a staged request is not the guardian's signature"
         );
-        assert!(rite_view(&comms, open).complete());
+        assert_eq!(rite_view(&comms, open).next, Some(2));
 
         let pending = comms.join("pending");
         let items = signing::read_pending(&pending).unwrap();
@@ -1310,6 +1338,14 @@ steps = ["request archive", "grant archive"]
                 role: "guardian".into()
             }]
         );
+
+        // Re-running preserves the exact staged request rather than replacing
+        // it with a newly timestamped core.
+        let staged = step_output(&comms, open, &open.steps[2]).unwrap();
+        let before = std::fs::read(&staged).unwrap();
+        let repeated = execute_step(&comms, open, &open.steps[2], &ExecInputs::default()).unwrap();
+        assert!(repeated.message.contains("already staged"));
+        assert_eq!(before, std::fs::read(&staged).unwrap());
 
         // The guardian signs and finalizes; the step stays done because the
         // endorsement (by claim content) is now in the store.
@@ -1339,6 +1375,61 @@ steps = ["request archive", "grant archive"]
             Some(sid.as_str())
         );
         assert_eq!(att.signatures[0].by, gid);
+    }
+
+    #[test]
+    fn required_rite_blocks_close_until_finalized_countersign() {
+        let comms = scratch("required-rite");
+        let (mut cfg, guardian, _) = cs_setup(&comms);
+        cfg.rites.push(Rite {
+            name: "close".into(),
+            steps: vec![Step {
+                verb: "attest".into(),
+                target: Some("transcript".into()),
+            }],
+            requires: vec!["open".into()],
+            allow_waivers: false,
+        });
+        let open = cfg.rite("open").unwrap();
+        let close = cfg.rite("close").unwrap();
+        execute_step(&comms, open, &open.steps[0], &ExecInputs::default()).unwrap();
+        execute_step(
+            &comms,
+            open,
+            &open.steps[1],
+            &ExecInputs {
+                body: Some(b"# entry\n".to_vec()),
+                ..ExecInputs::default()
+            },
+        )
+        .unwrap();
+        execute_step(&comms, open, &open.steps[2], &ExecInputs::default()).unwrap();
+
+        let blocked = execute_step(
+            &comms,
+            close,
+            &close.steps[0],
+            &ExecInputs {
+                body: Some(b"transcript\n".to_vec()),
+                ..ExecInputs::default()
+            },
+        )
+        .unwrap_err();
+        assert!(blocked.contains("requires completed rite(s) [open]"));
+
+        let pending = comms.join("pending");
+        signing::sign_pending(&pending, &guardian).unwrap();
+        signing::finalize_pending(&pending, &comms.join("store")).unwrap();
+        execute_step(
+            &comms,
+            close,
+            &close.steps[0],
+            &ExecInputs {
+                body: Some(b"transcript\n".to_vec()),
+                ..ExecInputs::default()
+            },
+        )
+        .unwrap();
     }
 
     #[test]

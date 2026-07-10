@@ -13,7 +13,7 @@
     "test": "npm run test:models && npm run test:legacy",
     "test:models": "vitest run",
     "test:legacy": "node --test tests/legacy-kernel-contract.test.mjs",
-    "test:browser": "node --test tests/browser-shell.test.mjs"
+    "test:browser": "npm run build && node --test tests/browser-shell.test.mjs"
   },
   "keywords": [],
   "author": "",

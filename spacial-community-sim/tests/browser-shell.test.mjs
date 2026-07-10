@@ -1,10 +1,31 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import test from "node:test";
 import { chromium } from "playwright";
 
 const baseUrl = process.env.COMMS_SIM_URL || "http://127.0.0.1:4173";
 
+async function previewServer() {
+  if (process.env.COMMS_SIM_URL) return null;
+  const vite = new URL("../node_modules/vite/bin/vite.js", import.meta.url);
+  const server = spawn(process.execPath, [vite.pathname, "preview", "--host", "127.0.0.1", "--port", "4173"], {
+    stdio: "ignore"
+  });
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      const response = await fetch(baseUrl);
+      if (response.ok) return server;
+    } catch {
+      // Preview is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  server.kill();
+  throw new Error("Vite preview did not start.");
+}
+
 test("shell selects Pixi geography, Cytoscape evidence, and legacy fallback", async () => {
+  const server = await previewServer();
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const errors = [];
@@ -40,5 +61,6 @@ test("shell selects Pixi geography, Cytoscape evidence, and legacy fallback", as
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
     await browser.close();
+    server?.kill();
   }
 });

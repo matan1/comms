@@ -99,7 +99,8 @@ Run the new projection, kernel-contract, and production-browser checks:
 ```sh
 npm test
 npm run build
-npm run test:browser  # requires: npx playwright install chromium
+npx playwright install chromium
+npm run test:browser
 ```
 
 ## What it models

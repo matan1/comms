@@ -149,10 +149,7 @@ fn configured_archive(root: &Path) -> PathBuf {
 
 impl App {
     fn pending_dirs(&self) -> Vec<PathBuf> {
-        vec![
-            self.root.join(".comms/pending"),
-            self.root.join("continuity/pending"),
-        ]
+        vec![self.root.join(".comms/pending")]
     }
 
     fn refresh(&mut self) {
@@ -455,7 +452,7 @@ fn render_pending(frame: &mut Frame, app: &App, area: Rect) {
             p.body_len.unwrap_or(0),
             p.body_text.as_deref().unwrap_or("[detached or binary]"),
         )
-    }).unwrap_or_else(|| "No pending items. Discovery checked both .comms/pending and continuity/pending.".into());
+    }).unwrap_or_else(|| "No pending items. Discovery checked .comms/pending.".into());
     frame.render_widget(
         Paragraph::new(detail).wrap(Wrap { trim: false }).block(
             Block::default()

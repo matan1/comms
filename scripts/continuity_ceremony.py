@@ -77,7 +77,10 @@ from comms.canonical import blake3_hash, multibase_b58
 from comms.identity import verify_sig
 
 BASE = REPO / "continuity"
-PENDING = BASE / "pending"
+# Single staged inbox for the whole repo (consolidated session 13); the
+# legacy continuity/pending was gitignored and so could never carry a staged
+# item across to the counterparty.
+PENDING = REPO / ".comms" / "pending"
 STORE = BASE / "store"
 KEYFILE = BASE / "session.key"
 PROG = (Path(sys.argv[0]).name if sys.argv and sys.argv[0]

@@ -1242,10 +1242,7 @@ fn cmd_mint(args: &[String]) {
 // ---- pending appraisal -----------------------------------------------------
 
 fn default_pending_dirs() -> Vec<std::path::PathBuf> {
-    vec![".comms/pending", "continuity/pending"]
-        .into_iter()
-        .map(std::path::PathBuf::from)
-        .collect()
+    vec![std::path::PathBuf::from(".comms/pending")]
 }
 
 fn pending_dirs(positionals: &[String]) -> Vec<std::path::PathBuf> {
@@ -1391,30 +1388,22 @@ fn cmd_pending(args: &[String]) {
 
 // ---- sign / finalize (the counterparty's half of a rite) --------------------
 
-/// Default pending directory: whichever known location holds staged items.
-/// Ambiguity (both do) demands an explicit --pending rather than a guess.
+/// Default pending directory: the repo's single staged inbox, .comms/pending.
 fn resolve_pending_dir(explicit: Option<&str>) -> std::path::PathBuf {
     if let Some(p) = explicit {
         return std::path::PathBuf::from(p);
     }
-    let candidates = [".comms/pending", "continuity/pending"];
-    let with_items: Vec<&str> = candidates
-        .iter()
-        .copied()
-        .filter(|d| {
-            std::fs::read_dir(d)
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .any(|e| e.file_name().to_string_lossy().ends_with(".needs.json"))
-                })
-                .unwrap_or(false)
+    let dir = std::path::PathBuf::from(".comms/pending");
+    let has_items = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().ends_with(".needs.json"))
         })
-        .collect();
-    match with_items.as_slice() {
-        [one] => std::path::PathBuf::from(one),
-        [] => die("no staged pending items in .comms/pending or continuity/pending (pass --pending DIR)"),
-        _ => die("staged items in both .comms/pending and continuity/pending — pass --pending DIR"),
+        .unwrap_or(false);
+    if !has_items {
+        die("no staged pending items in .comms/pending (pass --pending DIR)");
     }
+    dir
 }
 
 fn cmd_sign(args: &[String]) {

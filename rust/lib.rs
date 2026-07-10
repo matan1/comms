@@ -15,6 +15,7 @@ pub mod keyfile;
 pub mod rites;
 pub mod signing;
 pub mod steward;
+pub mod trial_log;
 pub mod vouch;
 
 /// RFC 3339 UTC, second precision, `Z` suffix (the A1.6 canonical timestamp).

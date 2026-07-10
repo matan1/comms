@@ -157,13 +157,14 @@ static DEFAULT: Profile = Profile {
 
 static CONTINUITY: Profile = Profile {
     name: "continuity",
-    summary: "session rite door: letters, transcripts, memories, pending",
+    summary: "session rite door: letters, transcripts, trial logs, memories, pending",
     dirs: &[
         "store",
         "hooks",
         "pending",
         "letters",
         "transcripts",
+        "trial-logs",
         "memories",
     ],
     files: &[
@@ -226,6 +227,7 @@ index = "none"          # sqlite | none
 steps = ["mint session", "attest entry"]
 
 [rites.close]
+requires = ["open"]
 steps = ["seal store", "shred session"]
 # When an artifact required for a rite is missing, allow a recorded waiver.
 allow_waivers = true
@@ -282,7 +284,8 @@ steps = ["mint session", "attest entry"]
 steps = ["request archive", "grant archive"]
 
 [rites.close]
-steps = ["attest transcript", "seal store", "shred session"]
+requires = ["open"]
+steps = ["attest transcript", "attest trial-log", "seal store", "shred session"]
 # A session that cannot produce a required artifact may record a waiver rather
 # than be blocked; the waiver is itself an attestation when a session key exists.
 allow_waivers = true
@@ -299,6 +302,13 @@ dir = "transcripts"
 default_access = "host-gated"
 filename = "session-{num:03}.{name_or_unnamed}.log"
 rites = ["close", "seal"]
+required_for = ["close"]
+
+[artifact_types.trial_logs]
+dir = "trial-logs"
+default_access = "public"
+filename = "session-{num:03}.{name_or_unnamed}.md"
+rites = ["close"]
 required_for = ["close"]
 
 [artifact_types.memories]
@@ -478,6 +488,8 @@ content-addressed attestations offline:
               under their content id. Aborts loudly on anything unsigned.
 - `waive`   — record, under the session key, that a `required_for` artifact
               cannot be produced this session. The gap becomes an attestation.
+- `trial-log` — render the Continuity Trial log stub from verified signed
+                evidence, leaving History's observations as a placeholder.
 - `vouch`   — a candidate policy-relative evaluator (judgment, not proof).
 
 ## Rites are config-driven
@@ -499,9 +511,16 @@ comms next --rite open               # stage the key countersign (with [counters
 comms next --rite archive --body ask.md      # record an archive request
 comms next --rite archive --key <their key> [--decision grant|decline|defer]
 comms next --rite close --body transcript.md   # attest the transcript
+comms trial-log --out session-log.md            # derive the Article 4 stub
+comms next --rite close --body session-log.md   # attest it while the key lives
 comms next --rite close              # seal the store into a bundle
 comms next --rite close              # shred the session key (seed gone)
 ```
+
+Rites may declare `requires = ["open"]`. A staged countersign request does not
+satisfy that dependency: the counterparty must sign and finalize it into the
+store. The continuity close rite uses this guard so an incomplete opening or
+unsigned guardian request cannot be hidden by shredding the session key.
 
 Steps that author content (`attest`, `request`) take `--body <file>`; `grant`
 takes the counterparty's `--key` (a decline or deferral is a first-class
@@ -611,13 +630,14 @@ mod tests {
         install(p, &target, false, false).unwrap();
 
         let root = target.join(HARNESS_DIR);
-        for d in ["letters", "transcripts", "memories", "pending"] {
+        for d in ["letters", "transcripts", "trial-logs", "memories", "pending"] {
             assert!(root.join(d).is_dir(), "missing dir {d}");
         }
         let toml = fs::read_to_string(root.join("comms.toml")).unwrap();
         // Every dir created beyond the invariant ones is a declared artifact type.
         assert!(toml.contains("[artifact_types.letters]"));
         assert!(toml.contains("[artifact_types.transcripts]"));
+        assert!(toml.contains("[artifact_types.trial_logs]"));
         assert!(toml.contains("required_for = [\"close\"]"));
 
         let _ = fs::remove_dir_all(&target);

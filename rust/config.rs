@@ -208,6 +208,8 @@ impl Step {
 pub struct Rite {
     pub name: String,
     pub steps: Vec<Step>,
+    /// Other rites that must be complete before this one may advance.
+    pub requires: Vec<String>,
     pub allow_waivers: bool,
 }
 
@@ -280,11 +282,16 @@ impl HarnessConfig {
                     .and_then(TomlValue::as_array)
                     .map(|a| a.iter().map(|s| parse_step(s)).collect())
                     .unwrap_or_default();
+                let requires = toml
+                    .get(&table, "requires")
+                    .and_then(TomlValue::as_array)
+                    .map(|a| a.to_vec())
+                    .unwrap_or_default();
                 let allow_waivers = toml
                     .get(&table, "allow_waivers")
                     .and_then(TomlValue::as_bool)
                     .unwrap_or(false);
-                Rite { name, steps, allow_waivers }
+                Rite { name, steps, requires, allow_waivers }
             })
             .collect();
 
@@ -382,6 +389,7 @@ index = "sqlite"
 steps = ["mint session", "attest entry"]
 
 [rites.close]
+requires = ["open"]
 steps = ["attest transcript", "seal store", "shred session"]
 allow_waivers = true
 
@@ -399,6 +407,10 @@ required_for = ["close"]
         assert_eq!(
             t.get("rites.open", "steps").unwrap().as_array(),
             Some(["mint session".to_owned(), "attest entry".to_owned()].as_slice())
+        );
+        assert_eq!(
+            t.get("rites.close", "requires").unwrap().as_array(),
+            Some(["open".to_owned()].as_slice())
         );
     }
 
@@ -423,6 +435,7 @@ required_for = ["close"]
 
         let close = cfg.rite("close").unwrap();
         assert!(close.allow_waivers);
+        assert_eq!(close.requires, vec!["open".to_owned()]);
         assert_eq!(
             close.steps,
             vec![

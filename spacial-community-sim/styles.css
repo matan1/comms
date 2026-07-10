@@ -534,6 +534,37 @@ button.primary:hover { background: #38423f; }
   line-height: 1.4;
 }
 
+.harbor-readout { margin-top: 14px; }
+
+.harbor-stats {
+  margin: 0;
+  padding: 12px 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.harbor-stats div {
+  display: grid;
+  gap: 2px;
+  border-bottom: 1px solid rgba(55, 69, 66, 0.12);
+  padding-bottom: 8px;
+}
+
+.harbor-stats dt {
+  color: var(--ink-soft);
+  font: 10px/1.2 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.harbor-stats dd {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+body[data-world="harbor"] .stage { background: #93b2ad; }
+
 /* --- Narrow layouts --- */
 
 @media (max-width: 1100px) {

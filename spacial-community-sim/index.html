@@ -34,6 +34,17 @@
               <select id="worldMode">
                 <option value="village">Village</option>
                 <option value="workstation">Multi-agent workstation</option>
+                <option value="harbor">Archive Harbor</option>
+              </select>
+            </label>
+            <label id="harborProjectionControl" hidden>Harbor projection
+              <select id="harborProjection">
+                <option value="geography">Geography &amp; couriers</option>
+                <option value="evidence">Evidence &amp; body availability</option>
+                <option value="custody">Custodian wall &amp; delivery</option>
+                <option value="pending">Pending attention desks</option>
+                <option value="authority">Authority vs host state</option>
+                <option value="participant">Selected viewer's law</option>
               </select>
             </label>
             <label id="endpointControl" hidden>Interaction endpoints
@@ -177,15 +188,19 @@
             </div>
             <ol id="eventLog" class="event-log"></ol>
           </section>
+          <section id="harborReadout" class="panel harbor-readout" hidden>
+            <div class="panel-head"><h2>Harbor projection</h2></div>
+            <div id="harborSummary"></div>
+          </section>
         </aside>
       </div>
     </main>
 
-    <!-- Load order matters: world (terrain + cost field) -> sim (logic) ->
-         render (painting) -> ui (DOM wiring, kicks everything off). The
-         headless harness concatenates the same four files in the same order. -->
+    <!-- Load order matters: world -> evidence kernel -> harbor lifecycle ->
+         projections -> UI. Headless harbor harnesses use the same order. -->
     <script src="./world.js"></script>
     <script src="./sim.js"></script>
+    <script src="./harbor.js"></script>
     <script src="./render.js"></script>
     <script src="./ui.js"></script>
   </body>

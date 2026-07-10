@@ -121,7 +121,7 @@ const ADVERSARY_PRESETS = {
 // keep running.
 function normalizeParams(raw) {
   return {
-    worldMode: raw.worldMode === "workstation" ? "workstation" : "village",
+    worldMode: ["workstation", "harbor"].includes(raw.worldMode) ? raw.worldMode : "village",
     population: Math.round(raw.population ?? 18),
     farmShare: (raw.farmShare ?? 25) / 100,
     trust: (raw.trust ?? 55) / 100,
@@ -180,6 +180,7 @@ function makeVillager(index, opts = {}) {
     label: (world.kind === "workstation" ? agentNames : names)[index
       % (world.kind === "workstation" ? agentNames.length : names.length)],
     member: opts.member !== false,
+    communityId: opts.communityId || null,
     archetype: opts.archetype || "honest",
     farmstead: farm,                  // descriptive only; presence is cost-driven
     specialty: specialties[index % specialties.length],
@@ -268,7 +269,11 @@ function perceivedTrust(viewer, subjectId) {
   const subject = state.byId.get(subjectId);
   if (!subject) return 0;
   const b = viewer.beliefs.get(subjectId) || { pos: 0, neg: 0 };
-  const prior = state.prior * (subject.member ? 1 : 0.72);
+  const sameCommunity = !viewer.communityId || viewer.communityId === subject.communityId;
+  const localPrior = viewer.communityId && state.communities
+    ? (state.communities.find((c) => c.id === viewer.communityId)?.prior ?? state.prior)
+    : state.prior;
+  const prior = localPrior * (subject.member && sameCommunity ? 1 : 0.72);
   const w = 6;
   return clamp((b.pos + prior * w) / (b.pos + b.neg + w), 0.02, 0.99);
 }
@@ -356,10 +361,21 @@ function seedState(p) {
 
   const farmCount = Math.round(p.population * p.farmShare);
   for (let i = 0; i < p.population; i += 1) {
-    const v = makeVillager(state.nextVillager++, { farmstead: i < farmCount });
+    const communityId = world.kind === "harbor"
+      ? world.settlements[i % world.settlements.length].id
+      : null;
+    const home = world.kind === "harbor"
+      ? claimHome(world.homes.filter((h) => h.communityId === communityId))
+      : null;
+    const v = makeVillager(state.nextVillager++, {
+      farmstead: world.kind !== "harbor" && i < farmCount,
+      communityId, home
+    });
     state.villagers.push(v);
     state.byId.set(v.id, v);
   }
+
+  if (world.kind === "harbor") initializeArchiveHarbor(p);
 
   // A founding history: each villager arrives knowing a few true things about
   // their nearest neighbors, so day 1 isn't a village of mutual strangers.
@@ -380,10 +396,14 @@ function seedState(p) {
   }
 
   logEvent("rule/1",
-    world.kind === "workstation" ? "Host policy loaded" : "Founding rule adopted",
+    world.kind === "workstation" ? "Host policy loaded"
+      : world.kind === "harbor" ? "Independent harbor covenants loaded"
+      : "Founding rule adopted",
     world.kind === "workstation"
       ? "Admission, resource appraisal, and store-exchange policy are active."
-      : "Ceremony quorum, sponsor rule, and the gossip habits of the village are set.");
+      : world.kind === "harbor"
+        ? "Each shore retains its own signed policy head, archive custody, pending attention, and named-purpose recognition."
+        : "Ceremony quorum, sponsor rule, and the gossip habits of the village are set.");
   runPhaseLogic(p, 0);
   assignTargets(p);
   refreshCaches();
@@ -412,6 +432,10 @@ function advanceDay(p) {
 
 function runPhaseLogic(p, phase) {
   state.interactions = [];
+  if (world.kind === "harbor") {
+    runHarborPhase(p, phase);
+    return;
+  }
   if (phase === 0) phaseMorning(p);
   else if (phase === 1) phaseMarket(p);
   else if (phase === 2) phaseCommons(p);

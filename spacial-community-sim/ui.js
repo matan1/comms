@@ -53,7 +53,8 @@ const workstationAdversaries = {
 
 const worldDescriptions = {
   village: "A geographic community where roads, meetings, and word of mouth shape partial knowledge.",
-  workstation: "Persistent agent VMs share host computation, model services, storage, and a bounded remote-service gateway."
+  workstation: "Persistent agent VMs share host computation, model services, storage, and a bounded remote-service gateway.",
+  harbor: "Independent shores exchange sealed bundles while retaining separate law, custody, pending attention, and authority."
 };
 
 const villageAdversaryNames = {
@@ -80,6 +81,7 @@ function byId(id) {
 
 const controls = hasDom ? {
   worldMode: byId("worldMode"),
+  harborProjection: byId("harborProjection"),
   interactionEndpoints: byId("interactionEndpoints"),
   keyCustody: byId("keyCustody"),
   ledgerMode: byId("ledgerMode"),
@@ -118,7 +120,7 @@ function rawFromControls() {
   for (const key of Object.keys(controls)) {
     if (key === "appraisalMode") raw.vouchMode = controls[key].value === "vouch";
     else if (key === "worldMode") raw.worldMode = controls[key].value;
-    else if (["interactionEndpoints", "keyCustody", "ledgerMode"].includes(key)) continue;
+    else if (["interactionEndpoints", "keyCustody", "ledgerMode", "harborProjection"].includes(key)) continue;
     else if (key !== "adversaryPreset") raw[key] = Number(controls[key].value);
   }
   return raw;
@@ -144,6 +146,10 @@ function keyCustodyMode() {
 
 function ledgerMode() {
   return hasDom && controls.ledgerMode ? controls.ledgerMode.value : "off";
+}
+
+function harborProjectionMode() {
+  return hasDom && controls.harborProjection ? controls.harborProjection.value : "geography";
 }
 
 function adversaryOrigin(v) {
@@ -238,6 +244,7 @@ function renderStatic() {
     ui.resourceMetric.classList.toggle("overload", telemetry.vramUsed > telemetry.vramCapacity);
     ui.jobsMetric.textContent = `${telemetry.jobs - telemetry.failedJobs} / ${telemetry.jobs}`;
   }
+  renderHarborSummary();
   ui.runBtn.textContent = running ? "Pause" : "Run";
 
   const vp = viewpoint();
@@ -249,6 +256,30 @@ function renderStatic() {
 
   renderLog();
   renderInspector();
+}
+
+function renderHarborSummary() {
+  const panel = byId("harborReadout");
+  if (!panel) return;
+  const harbor = world.kind === "harbor";
+  panel.hidden = !harbor;
+  if (!harbor) return;
+  const report = harborReport();
+  const vp = viewpoint();
+  let policyTrace = "Select a participant to inspect policy-relative judgment.";
+  if (vp && vp.communityId && harborCommunity(vp.communityId)) {
+    const trace = evaluateHarborEvidence(vp, state.harborProbe.targetId, HARBOR_PURPOSE,
+      state.harborProbe.attestationIndices, [...harborCommunity(vp.communityId).archive.bodies]);
+    policyTrace = `<strong>${trace.outcome}</strong> under ${trace.policyId.split(":").pop()} · ${trace.counted.length} counted, ${trace.ignored.length} ignored, ${trace.unresolved.length} unresolved`;
+  }
+  byId("harborSummary").innerHTML = `
+    <dl class="harbor-stats">
+      <div><dt>sealed transport</dt><dd>${report.bundleDeliveries} delivered · ${report.failedBodyResolution} body resolution failure</dd></div>
+      <div><dt>pending attention</dt><dd>${report.reviewerLoad} reviews · ${report.clarificationCount} clarifications · ${report.harmfulReliance} harmful signed</dd></div>
+      <div><dt>authority / host</dt><dd>${report.unauthorizedEnforcementTime} unauthorized ticks · ${report.unenforcedLegitimateGrantTime} unenforced grant ticks</dd></div>
+      <div><dt>fork / exit</dt><dd>${report.contestedHeads} contested head · ${report.survivingExits} surviving exit</dd></div>
+      <div><dt>selected law</dt><dd>${policyTrace}</dd></div>
+    </dl>`;
 }
 
 function renderLog() {
@@ -296,7 +327,9 @@ function renderInspector() {
       ${adversaryOrigin(v)}
       <span>${world.kind === "workstation"
         ? `${v.member ? "enrolled agent" : "staged agent"} · ${v.home.vm || "unbound VM"} · ${v.specialty.id} service`
-        : `${v.member ? (v.farmstead ? "farmstead member" : "village member") : "newcomer"} · ${v.specialty.id}`}</span>
+        : world.kind === "harbor"
+          ? `${harborCommunity(v.communityId)?.label || "exited shore"} member · ${v.specialty.id}`
+          : `${v.member ? (v.farmstead ? "farmstead member" : "village member") : "newcomer"} · ${v.specialty.id}`}</span>
     </div>
     <dl class="inspector-stats">
       <div><dt>knows</dt><dd>${v.knowledge.size} of ${total} attestations (${coverage}%)</dd></div>
@@ -304,6 +337,7 @@ function renderInspector() {
       <div><dt>${world.kind === "workstation" ? "resource route" : "trip to market"}</dt><dd>cost ${tripCost.toFixed(2)} · uses ~${tripChance}% of ${world.kind === "workstation" ? "cycles" : "days"}</dd></div>
       <div><dt>capability</dt><dd>${v.capability.toFixed(2)}</dd></div>
       <div><dt>appraisal</dt><dd>${params().vouchMode ? "Vouch profile" : "flat tally"}</dd></div>
+      ${world.kind === "harbor" ? `<div><dt>recognized law</dt><dd>${harborCommunity(v.communityId)?.policyHead || "carried exit policy"}</dd></div>` : ""}
       <div><dt>${v.member ? "joined" : "arrived"}</dt><dd>day ${v.member ? v.joinedDay : v.arrivedDay}</dd></div>
     </dl>
     ${divergences.length ? `
@@ -381,15 +415,16 @@ function syncOutputs() {
   }
   const mode = controls.worldMode.value;
   const workstation = mode === "workstation";
+  const harbor = mode === "harbor";
   byId("worldDescription").textContent = worldDescriptions[mode];
-  byId("populationHeading").innerHTML = `${workstation ? "Agent network" : "Village"} <span class="hint">applies on reset</span>`;
-  byId("populationLabel").textContent = workstation ? "Agent VMs" : "Villagers";
-  byId("farmShareLabel").textContent = workstation ? "Edge/API-routed share" : "Farmstead share";
-  byId("exchangeHeading").textContent = workstation ? "Store exchange" : "Word of mouth";
-  byId("gossipRadiusLabel").textContent = workstation ? "Exchange reach" : "Gossip reach";
-  byId("gossipDepthLabel").textContent = workstation ? "Bundle depth" : "Gossip depth";
-  byId("travelWillLabel").textContent = workstation ? "Route tolerance" : "Travel willingness";
-  byId("admissionHeading").textContent = workstation ? "Controller admission" : "Ceremony rule";
+  byId("populationHeading").innerHTML = `${workstation ? "Agent network" : harbor ? "Harbor residents" : "Village"} <span class="hint">applies on reset</span>`;
+  byId("populationLabel").textContent = workstation ? "Agent VMs" : harbor ? "Residents" : "Villagers";
+  byId("farmShareLabel").textContent = workstation ? "Edge/API-routed share" : harbor ? "Shore split (fixed)" : "Farmstead share";
+  byId("exchangeHeading").textContent = workstation ? "Store exchange" : harbor ? "Local evidence exchange" : "Word of mouth";
+  byId("gossipRadiusLabel").textContent = workstation ? "Exchange reach" : harbor ? "Local exchange reach" : "Gossip reach";
+  byId("gossipDepthLabel").textContent = workstation ? "Bundle depth" : harbor ? "Local exchange depth" : "Gossip depth";
+  byId("travelWillLabel").textContent = workstation ? "Route tolerance" : harbor ? "Harbor travel budget" : "Travel willingness";
+  byId("admissionHeading").textContent = workstation ? "Controller admission" : harbor ? "Local law defaults" : "Ceremony rule";
   byId("sponsorsLabel").textContent = workstation ? "Agent sponsors required" : "Sponsors required";
   byId("witnessLabel").textContent = workstation ? "Controller quorum" : "Witness quorum";
   byId("arrivalLabel").textContent = workstation ? "VM image arrivals" : "Newcomer arrivals";
@@ -407,18 +442,20 @@ function syncOutputs() {
 
 function applyWorldPresentation() {
   const workstation = world.kind === "workstation";
+  const harbor = world.kind === "harbor";
   document.body.dataset.world = world.kind;
-  byId("surveyTitle").textContent = workstation ? "Workstation Topology" : "Village Survey";
+  byId("surveyTitle").textContent = workstation ? "Workstation Topology" : harbor ? "Archive Harbor" : "Village Survey";
   byId("endpointControl").hidden = !workstation;
   byId("custodyControl").hidden = !workstation;
   byId("ledgerControl").hidden = !workstation;
-  byId("mapStage").setAttribute("aria-label", workstation ? "Multi-agent workstation map" : "Village map");
+  byId("harborProjectionControl").hidden = !harbor;
+  byId("mapStage").setAttribute("aria-label", workstation ? "Multi-agent workstation map" : harbor ? "Archive Harbor map" : "Village map");
   byId("membersMetricLabel").textContent = workstation ? "Enrolled agents" : "Members";
   byId("coverageMetricLabel").textContent = workstation ? "Fresh-evidence coverage" : "Fresh-news coverage";
   byId("logHeading").textContent = workstation ? "Controller log" : "Field log";
   document.title = workstation
     ? "Comms Workstation — Spatial Community Simulator"
-    : "Comms Village — Spatial Community Simulator";
+    : harbor ? "Archive Harbor — Plural Community Simulator" : "Comms Village — Spatial Community Simulator";
   document.querySelector(".legend").innerHTML = workstation ? `
     <li><i class="dot trust-high"></i>trusted agent, from the current viewpoint</li>
     <li><i class="dot trust-low"></i>distrusted agent, from the same viewpoint</li>
@@ -428,6 +465,13 @@ function applyWorldPresentation() {
     <li><i class="swatch ripple"></i>Comms records exchanged between stores</li>
     <li><i class="line direct"></i>service interaction in this cycle</li>
     <li><i class="line evidence"></i>selected agent's appraisal evidence</li>`
+    : harbor ? `
+    <li><i class="dot trust-high"></i>trusted under the selected viewer's store and law</li>
+    <li><i class="dot trust-low"></i>rejected under that same projection</li>
+    <li><i class="dot stranger"></i>evidence absent from the selected store</li>
+    <li><i class="swatch ripple"></i>local evidence exchange only</li>
+    <li><i class="line direct"></i>courier route carrying a sealed bundle</li>
+    <li><i class="line evidence"></i>policy-counted or unresolved evidence</li>`
     : `
     <li><i class="dot trust-high"></i>trusted, as seen from the current viewpoint</li>
     <li><i class="dot trust-low"></i>distrusted, from the same viewpoint</li>
@@ -439,6 +483,8 @@ function applyWorldPresentation() {
     <li><i class="line evidence"></i>selected villager's appraisal evidence</li>`;
   document.querySelector(".legend-note").textContent = workstation
     ? "VM cells retain persistent signing identities while process avatars reach toward shared services. Select an agent to see only its local Comms evidence; adversary origins remain simulator annotations in the inspector."
+    : harbor
+      ? "A selected participant sees its own shore and recognized neighbors clearly; foreign membership never becomes local authority merely because a courier connected the docks."
     : "Adversary types use distinct persistent colors and labels only in omniscient view. Click a villager to hide that ground truth and see the village as they believe it.";
 }
 
@@ -473,6 +519,7 @@ function init() {
   controls.interactionEndpoints.addEventListener("change", renderStatic);
   controls.keyCustody.addEventListener("change", renderStatic);
   controls.ledgerMode.addEventListener("change", renderStatic);
+  controls.harborProjection.addEventListener("change", renderStatic);
 
   syncOutputs();
   seedState(params());

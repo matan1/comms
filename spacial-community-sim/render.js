@@ -105,7 +105,137 @@ function drawWorld(ctx, w, h) {
     drawWorkstationWorld(ctx, w, h);
     return;
   }
+  if (world.kind === "harbor") {
+    drawHarborWorld(ctx, w, h);
+    return;
+  }
   drawVillageWorld(ctx, w, h);
+}
+
+function drawHarborWorld(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, "#d8d1b4");
+  grad.addColorStop(1, "#bdc8aa");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  const water = world.water;
+  ctx.save();
+  ctx.translate((water.x + water.w / 2) * w, (water.y + water.h / 2) * h);
+  ctx.rotate(-0.28);
+  ctx.fillStyle = "#79a9b4";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, water.w * w * 0.62, water.h * h * 0.58, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  const vp = typeof viewpoint === "function" ? viewpoint() : null;
+  const viewerCommunity = vp?.communityId ? harborCommunity(vp.communityId) : null;
+  const recognized = new Set([
+    viewerCommunity?.id,
+    ...(viewerCommunity?.neighbors || []).filter((n) => n.status === "recognized").map((n) => n.communityId)
+  ].filter(Boolean));
+  for (const settlement of world.settlements) {
+    ctx.save();
+    if (vp && !recognized.has(settlement.id)) ctx.globalAlpha = 0.28;
+    ctx.beginPath();
+    ctx.arc(settlement.center.x * w, settlement.center.y * h, settlement.radius * w, 0, Math.PI * 2);
+    ctx.fillStyle = hexToRgba(settlement.color, 0.12);
+    ctx.fill();
+    ctx.strokeStyle = hexToRgba(settlement.color, 0.75);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#243538";
+    ctx.font = "bold 14px ui-monospace, monospace";
+    ctx.fillText(settlement.label, (settlement.center.x - 0.09) * w, (settlement.center.y - 0.15) * h);
+    for (const home of world.homes.filter((h) => h.communityId === settlement.id)) {
+      drawHouse(ctx, home.x * w, home.y * h);
+    }
+    drawHarborStation(ctx, settlement.archive, w, h, "ARCHIVE", settlement.color);
+    drawHarborStation(ctx, settlement.desk, w, h, "PENDING", "#8c6f52");
+    drawHarborStation(ctx, settlement.dock, w, h, "DOCK", "#3f6673");
+    ctx.restore();
+  }
+
+  ctx.beginPath();
+  world.courierRoute.forEach((pt, i) => i ? ctx.lineTo(pt.x * w, pt.y * h) : ctx.moveTo(pt.x * w, pt.y * h));
+  ctx.strokeStyle = "rgba(236, 247, 242, 0.65)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 7]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  for (const courier of state.couriers || []) {
+    const x = courier.location.x * w;
+    const y = courier.location.y * h;
+    ctx.fillStyle = "#f2ead1";
+    ctx.strokeStyle = "#315864";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 7); ctx.lineTo(x + 8, y + 5); ctx.lineTo(x - 7, y + 3); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#243538";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText(`${courier.label} · ${courier.status}`, x + 10, y + 3);
+  }
+
+  const projection = typeof harborProjectionMode === "function" ? harborProjectionMode() : "geography";
+  drawHarborProjection(ctx, w, h, projection);
+}
+
+function drawHarborStation(ctx, point, w, h, label, color) {
+  const x = point.x * w;
+  const y = point.y * h;
+  ctx.fillStyle = color;
+  ctx.fillRect(x - 15, y - 10, 30, 20);
+  ctx.fillStyle = "#f5f0df";
+  ctx.font = "bold 7px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(label, x, y + 2);
+  ctx.textAlign = "start";
+}
+
+function drawHarborProjection(ctx, w, h, projection) {
+  if (projection === "geography") return;
+  for (const community of state.communities || []) {
+    const layout = world.settlements.find((s) => s.id === community.id);
+    if (!layout) continue;
+    const origin = projection === "pending" ? layout.desk : layout.archive;
+    let value = 0;
+    let label = "";
+    if (projection === "evidence") {
+      value = community.archive.store.size;
+      label = `${value} records · ${community.archive.bodies.size} bodies`;
+    } else if (projection === "custody") {
+      value = community.archive.deliveries.length;
+      label = `${community.archive.requests.length} requests · ${value} deliveries`;
+    } else if (projection === "pending") {
+      value = community.pendingDesk.queue.filter((id) => {
+        const proposal = state.proposals.find((p) => p.id === id);
+        return proposal && !["signed", "declined", "expired"].includes(proposal.status);
+      }).length;
+      label = `${value} pending`;
+    } else if (projection === "authority") {
+      value = state.authority.observedHostState.filter((x) => x.active !== x.authorized).length;
+      label = `${value} host divergence cases`;
+    } else if (projection === "participant") {
+      const vp = typeof viewpoint === "function" ? viewpoint() : null;
+      const recognized = vp && vp.communityId === community.id;
+      label = recognized ? `policy ${community.policyHead.split(":").pop()}` : "foreign law";
+      value = recognized ? 1 : 0;
+    }
+    const x = origin.x * w;
+    const y = origin.y * h - 28;
+    ctx.fillStyle = "rgba(25, 38, 41, 0.86)";
+    ctx.fillRect(x - 82, y - 11, 164, 22);
+    ctx.fillStyle = "#edf1e7";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(label, x, y + 3);
+    ctx.textAlign = "start";
+  }
 }
 
 function drawVillageWorld(ctx, w, h) {

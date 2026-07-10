@@ -8,9 +8,9 @@ under a seeded PRNG. Open `index.html` directly or serve:
 python3 -m http.server 8080
 ```
 
-## Two complementary maps
+## Three complementary maps
 
-The **Map** control switches between two worlds that share the same Comms,
+The **Map** control switches between three worlds that share the same Comms,
 Vouch, admission, adversary, and viewpoint mechanics:
 
 - **Village Survey** makes physical travel, meetings, and word of mouth shape
@@ -19,6 +19,19 @@ Vouch, admission, adversary, and viewpoint mechanics:
   cells around shared host services. Active process avatars remain tethered
   to their VM cores while they request language, vision, speech, embedding,
   CPU, storage, or remote services.
+- **Archive Harbor** places two independent communities around a costly courier
+  route. Each shore retains its own policy head, archive wall, pending desk,
+  membership, resources, and recognized neighbors.
+
+Archive Harbor extends the same viewer-relative evidence kernel. Couriers move
+sealed bundles rather than ambient gossip; bundle-member verification and
+detached-body availability are independent. The browser projection control
+switches among geography, evidence/body availability, archive delivery,
+pending attention, authority versus host state, and a selected participant's
+recognized law. The first scenario includes an intact bundle with a missing
+body, a valid opaque proposal flood, a useful clarification, both directions
+of host-enforcement divergence, contested policy succession, and a surviving
+exit community.
 
 The workstation map is not a cosmetic reskin. It has a 24 GB accelerator
 envelope, service-specific model profiles, remote-call failures, host buses,
@@ -58,6 +71,12 @@ Run its focused smoke test without invoking the large adversary matrix:
 
 ```sh
 cat world.js sim.js render.js ui.js workstation-smoke-test.js | node
+```
+
+Run the 25-seed Archive Harbor acceptance harness:
+
+```sh
+cat world.js sim.js harbor.js render.js ui.js archive-harbor-test.js | node
 ```
 
 ## What it models
@@ -147,12 +166,13 @@ its roads.
 
 ## Headless harness
 
-Logic and rendering are split across four classic scripts, loaded in order
-and sharing scope — the same order a Node harness concatenates them in:
+Logic and rendering are split across classic scripts, loaded in order and
+sharing scope — the same order a Node harness concatenates them in:
 
 ```
 world.js    terrain, the cost field, the cost API, plot lifecycle
 sim.js      villagers, attestations, beliefs, phases, gossip, metrics
+harbor.js   optional plural-law evidence lifecycle and Harbor harness state
 render.js   canvas painting, pulses, walking animation
 ui.js       DOM wiring, controls, inspector, frame loop
 ```
@@ -211,10 +231,10 @@ post-admission deals, adversary admission, and honest-newcomer admission cost.
 
 ## Deliberate simplifications (and where this goes)
 
-- One community; the farmstead is distance — now literally. The next tier
-  adds neighboring settlements, couriers carrying **bundles**, schisms, and
-  succession scenarios from Steward 1.0. `messagingCost` and the `cart`
-  param are the hooks it will land on.
+- Village mode remains one community; Harbor mode begins with two independent
+  shores and can add an exit settlement. It intentionally focuses on one
+  courier route and one deterministic succession contest before expanding to
+  a larger archipelago.
 - Travel is a cost, not a path: villagers still walk through obstacles, they
   just pay for them. Pathfinding buys realism, not insight, and would cost
   the determinism the harness depends on.

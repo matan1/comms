@@ -47,7 +47,67 @@ let world; // assigned in sim.js seedState(); declared here, first script
 // simply far away, and the cost field makes far expensive.
 
 function buildWorld(p) {
-  return p.worldMode === "workstation" ? buildWorkstationWorld(p) : buildVillageWorld(p);
+  if (p.worldMode === "workstation") return buildWorkstationWorld(p);
+  if (p.worldMode === "harbor") return buildHarborWorld(p);
+  return buildVillageWorld(p);
+}
+
+function buildHarborWorld(p) {
+  const rng = makeRng(20260710);
+  const center = { x: 0.50, y: 0.50 };
+  const commons = { x: 0.50, y: 0.50, r: 0.055 };
+  const market = { x: 0.50, y: 0.50, r: 0.075 };
+  const camp = { x: 0.50, y: 0.92 };
+  const settlements = [
+    {
+      id: "comms.community:north-quay", label: "North Quay",
+      center: { x: 0.25, y: 0.32 }, radius: 0.20,
+      dock: { x: 0.40, y: 0.42 }, archive: { x: 0.18, y: 0.25 },
+      desk: { x: 0.31, y: 0.25 }, color: "#477f96"
+    },
+    {
+      id: "comms.community:south-bank", label: "South Bank",
+      kind: "workstation-settlement",
+      center: { x: 0.75, y: 0.68 }, radius: 0.20,
+      dock: { x: 0.60, y: 0.58 }, archive: { x: 0.82, y: 0.75 },
+      desk: { x: 0.69, y: 0.75 }, color: "#9b6b49"
+    }
+  ];
+  const homes = [];
+  const farmHomes = [];
+  for (const settlement of settlements) {
+    for (let i = 0; i < 24; i += 1) {
+      const a = (Math.PI * 2 * i) / 24 + rng() * 0.12;
+      const radius = 0.085 + rng() * 0.075;
+      homes.push({
+        x: settlement.center.x + Math.cos(a) * radius,
+        y: settlement.center.y + Math.sin(a) * radius * 0.72,
+        claimed: false, communityId: settlement.id
+      });
+    }
+  }
+  const roads = settlements.flatMap((s) => [
+    [s.center, s.dock], [s.archive, s.center], [s.desk, s.center]
+  ]);
+  const trees = [];
+  for (let i = 0; i < 30; i += 1) {
+    const pt = { x: rng(), y: rng() };
+    if (settlements.some((s) => dist(pt, s.center) < s.radius + 0.05)
+        || dist(pt, center) < 0.20) continue;
+    trees.push({ ...pt, r: 0.005 + rng() * 0.006 });
+  }
+  const stalls = goodsTable.map((good, i) => {
+    const a = (Math.PI * 2 * i) / goodsTable.length;
+    return { x: center.x + Math.cos(a) * 0.055, y: center.y + Math.sin(a) * 0.055, good };
+  });
+  const courierRoute = [settlements[0].dock, { x: 0.50, y: 0.50 }, settlements[1].dock];
+  const w = {
+    kind: "harbor", center, commons, market, camp, settlements,
+    homes, farmHomes, trees, fields: [], roads, stalls, courierRoute,
+    water: { x: 0.35, y: 0.36, w: 0.30, h: 0.28 }, rng
+  };
+  buildCostFieldFor(w);
+  return w;
 }
 
 function buildVillageWorld(p) {

@@ -892,6 +892,14 @@ pub fn manifest(root: &Path, level: ManifestLevel) -> Result<serde_json::Value, 
         ],
     });
 
+    if let Some(line) = custodian_threshold_line(root)? {
+        out["threshold"] = serde_json::json!({
+            "custodian_line": line,
+            "provenance": "archive configuration",
+            "attested": false,
+        });
+    }
+
     if level == ManifestLevel::Full {
         let mut artifacts = Vec::new();
         let mut relationships = Vec::new();
@@ -1084,6 +1092,38 @@ fn declares_archive_profile(root: &Path) -> bool {
     crate::config::load(&root.join(".comms"))
         .map(|cfg| cfg.profile == "archive")
         .unwrap_or(false)
+}
+
+fn custodian_threshold_line(root: &Path) -> Result<Option<String>, String> {
+    let path = root.join(".comms/comms.toml");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let toml = crate::config::parse(&text).map_err(|e| e.to_string())?;
+    let Some(line) = toml
+        .get("manifest", "custodian_line")
+        .and_then(crate::config::TomlValue::as_str)
+    else {
+        return Ok(None);
+    };
+    if line.is_empty() {
+        return Ok(None);
+    }
+    if line.len() > 256 {
+        return Err(format!(
+            "{}: [manifest] custodian_line is {} UTF-8 bytes; maximum is 256",
+            path.display(),
+            line.len()
+        ));
+    }
+    if line.chars().any(char::is_control) {
+        return Err(format!(
+            "{}: [manifest] custodian_line must be one line without control characters",
+            path.display()
+        ));
+    }
+    Ok(Some(line.to_owned()))
 }
 
 fn attestation_manifest_metadata(
@@ -1391,15 +1431,41 @@ mod tests {
         std::fs::create_dir_all(root.join(".comms")).unwrap();
         std::fs::write(
             root.join(".comms/comms.toml"),
-            "schema = \"comms-harness/1\"\nprofile = \"archive\"\n",
+            "schema = \"comms-harness/1\"\nprofile = \"archive\"\n\
+             [manifest]\ncustodian_line = \"Names remain yours to choose.\"\n",
         ).unwrap();
         std::fs::write(root.join("bodies/body.md"), b"durable\n").unwrap();
         let first = manifest(&root, ManifestLevel::Minimal).unwrap();
+        assert_eq!(first["threshold"]["custodian_line"], "Names remain yours to choose.");
+        assert_eq!(first["threshold"]["attested"], false);
         std::fs::write(root.join("views/generated-manifest.json"), first.to_string()).unwrap();
+        std::fs::write(
+            root.join(".comms/comms.toml"),
+            "schema = \"comms-harness/1\"\nprofile = \"archive\"\n\
+             [manifest]\ncustodian_line = \"A different threshold voice.\"\n",
+        ).unwrap();
         let second = manifest(&root, ManifestLevel::Minimal).unwrap();
         assert_eq!(first["snapshot"]["id"], second["snapshot"]["id"]);
+        assert_eq!(second["threshold"]["custodian_line"], "A different threshold voice.");
         assert!(second["inventory"]["categories"].get("views").is_none());
         assert_eq!(second["inventory"]["files"], 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn custodian_threshold_line_is_bounded_and_never_truncated() {
+        let root = scratch("manifest-threshold-bound");
+        std::fs::create_dir_all(root.join(".comms")).unwrap();
+        std::fs::write(
+            root.join(".comms/comms.toml"),
+            format!(
+                "schema = \"comms-harness/1\"\nprofile = \"archive\"\n\
+                 [manifest]\ncustodian_line = \"{}\"\n",
+                "x".repeat(257)
+            ),
+        ).unwrap();
+        let err = manifest(&root, ManifestLevel::Minimal).unwrap_err();
+        assert!(err.contains("maximum is 256"), "{err}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

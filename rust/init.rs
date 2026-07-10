@@ -326,6 +326,11 @@ mode = "local"
 # names the path.
 grants = "/world/in/grants"
 
+[manifest]
+# Optional threshold voice, shown as authored context rather than derived
+# inventory. One line, at most 256 UTF-8 bytes; never injected automatically.
+custodian_line = ""
+
 # Artifact types name view files at intake. Views are undurable projections:
 # useful working dossiers generated from custody, never custody themselves.
 [artifact_types.letters]

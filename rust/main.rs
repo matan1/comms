@@ -56,6 +56,9 @@ fn main() {
         Some("deliver") => cmd_deliver(&argv[1..]),
         Some("intake") => cmd_intake(&argv[1..]),
         Some("audit") => cmd_audit(&argv[1..]),
+        Some("catalog") => cmd_catalog(&argv[1..]),
+        Some("manifest") => cmd_manifest(&argv[1..]),
+        Some("pending") => cmd_pending(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
         Some("waive") => cmd_waive(&argv[1..]),
         Some("sign") => cmd_sign(&argv[1..]),
@@ -96,12 +99,17 @@ fn usage_text() -> String {
          \x20         undurable views, attest custody (idempotent)\n\
          \x20 audit   [root]                   re-derive every id and hash in custody;\n\
          \x20         mark drift, never delete; suggest custody testimony\n\
+         \x20 catalog <path> [--json]          inventory an archive without changing it\n\
+         \x20 manifest <path> [--level minimal|full] [--out P]\n\
+         \x20         deterministic archive disclosure; never injected context\n\
+         \x20 pending list|inspect|state|clarify ...  appraise proposed acts\n\
          \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
          \x20 waive   <type> [dir] --body <reason>   record that this session cannot\n\
          \x20         produce a required artifact (the gap becomes an attestation)\n\
-         \x20 sign    --key <openssh|steward-key> [--pending DIR]   countersign staged\n\
+         \x20 sign    --key <openssh|steward-key> [--pending DIR] [--item ID]...\n\
+         \x20         countersign every or only explicitly selected staged item\n\
          \x20         pending items (the counterparty's half of a rite)\n\
-         \x20 finalize [--pending DIR] [--store DIR]  verify + move fully-signed\n\
+         \x20 finalize [--pending DIR] [--store DIR] [--item ID]...\n\
          \x20         pending items into the store\n\
          \x20 vouch   <bundle> --policy ID --subject ID --purpose S --as-of T [--json]\n\
          \x20         [--community ID] [--receipt-out P --key K]\n\
@@ -128,10 +136,13 @@ fn help_for(cmd: &str) -> String {
         "deliver" => "comms deliver <attestation-id|body-b3-hex> [repo-root] [--request ID]\n  Host/archive-side transport after a grant: resolve a detached body from the\n  configured archive, copy it to the grants/<request-id>/ delivery path, and\n  print the exact path and hash. If --request is omitted, uses this session's\n  recorded archive request from the continuity rite.\n",
         "intake" => "comms intake <bundle|file|dir> [archive-root] --key <custodian key> \\\n    [--legacy --provenance \"...\"]\n  Host/archive-side crossing: verify a sealed session bundle, ingest members by\n  id and bodies by hash (idempotent), regenerate undurable views/ for browsing,\n  and attest custody. --legacy takes unattested material in as testimony, by\n  hash, honestly labeled.\n",
         "audit" => "comms audit [archive-root]\n  Host/archive-side custody check: walk store/ and bodies/, re-derive every id\n  and hash, and report intact / absent / mismatched. Drift is marked, never\n  deleted. On drift, audit should propose a reviewed custody attestation draft.\n",
+        "catalog" => "comms catalog <path> [--json]\n  Read-only inventory of any archive-shaped or legacy directory. Hashes and\n  classifies regular files, counts text lines by top-level category, and\n  reports exact duplicate groups. Follows no symlinks and writes nothing.\n",
+        "manifest" => "comms manifest <path> [--level minimal|full] [--out P]\n  Generate a deterministic archive view. Minimal discloses only aggregate\n  structure and health; full adds artifact metadata, relationships, duplicates,\n  and gaps. Generation is automatic-capable, but inspection remains chosen.\n",
+        "pending" => "comms pending list [DIR]... [--json]\ncomms pending inspect <stem|id> [DIR]... [--json]\ncomms pending state <stem|id> --state S [--pending DIR]\ncomms pending clarify <stem|id> --body F --key K [--pending DIR] [--store DIR]\n  Discover and appraise proposed signing acts without conflating inboxes.\n  Clarification creates a signed question and leaves the pending core unchanged.\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
         "waive" => "comms waive <type> [dir] --body <reason file|->\n  Record a session-signed waiver: this session cannot produce a declared\n  `required_for` artifact, and says so on the record instead of being blocked.\n  Only rites with `allow_waivers = true` accept it at seal.\n",
-        "sign" => "comms sign --key <path> [--pending DIR]\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. Needs naming other keys are left\n  standing. Default DIR: .comms/pending or continuity/pending, whichever has\n  staged items.\n",
-        "finalize" => "comms finalize [--pending DIR] [--store DIR]\n  Verify every fully-signed pending item and move it into the store under its\n  content id. Aborts loudly if anything is unsigned or invalid. Default store:\n  the sibling store/ of the pending directory.\n",
+        "sign" => "comms sign --key <path> [--pending DIR] [--item STEM|ID]...\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. --item creates a bounded signing\n  plan; omitted, every item in the explicitly resolved inbox is considered.\n",
+        "finalize" => "comms finalize [--pending DIR] [--store DIR] [--item STEM|ID]...\n  Verify and move every or only explicitly selected fully-signed item into the\n  store. Selected finalization is atomic and unrelated inbox items cannot block\n  or be swept into it.\n",
         "vouch" => "comms vouch <bundle> --policy ID --subject ID --purpose S --as-of T [--json] [--community ID] [--receipt-out P --key K]\n  Policy-relative evaluation: a viewer's judgment, not proof.\n",
         _ => return usage_text(),
     };
@@ -161,6 +172,7 @@ struct Opts {
     values: HashMap<String, String>,
     media: Vec<String>,
     support: Vec<String>,
+    items: Vec<String>,
     flags: HashSet<String>,
 }
 
@@ -183,6 +195,7 @@ fn parse_opts(args: &[String]) -> Opts {
                 match a.as_str() {
                     "--media" => o.media.push(val),
                     "--support" => o.support.push(val),
+                    "--item" => o.items.push(val),
                     _ => {
                         o.values.insert(a.clone(), val);
                     }
@@ -1080,6 +1093,73 @@ fn cmd_audit(args: &[String]) {
     println!("\naudit clean: every id and hash re-derives.");
 }
 
+fn cmd_catalog(args: &[String]) {
+    let o = parse_opts(args);
+    let root = o.positionals.first().map(String::as_str)
+        .unwrap_or_else(|| die("usage: comms catalog <path> [--json]"));
+    let r = comms_core::archive::catalog(std::path::Path::new(root))
+        .unwrap_or_else(|e| die(format!("catalog failed: {e}")));
+
+    if o.has("--json") {
+        let categories: serde_json::Map<String, serde_json::Value> = r.categories.iter().map(|(name, s)| (
+            name.clone(),
+            serde_json::json!({
+                "files": s.files, "bytes": s.bytes,
+                "text_files": s.text_files, "text_lines": s.text_lines,
+            }),
+        )).collect();
+        let entries: Vec<_> = r.entries.iter().map(|e| serde_json::json!({
+            "path": e.path, "bytes": e.bytes, "blake3": e.blake3,
+            "kind": e.kind, "lines": e.lines,
+        })).collect();
+        let duplicates: Vec<_> = r.duplicates.iter().map(|d| serde_json::json!({
+            "blake3": d.blake3, "bytes_each": d.bytes_each, "paths": d.paths,
+        })).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "root": r.root, "files": r.files, "bytes": r.bytes,
+            "text_files": r.text_files, "text_lines": r.text_lines,
+            "symlinks_skipped": r.symlinks_skipped,
+            "categories": categories, "kinds": r.kinds,
+            "duplicate_bytes": r.duplicate_bytes, "duplicates": duplicates,
+            "entries": entries,
+        })).unwrap_or_else(|e| die(format!("cannot render catalog JSON: {e}"))));
+        return;
+    }
+
+    println!("catalog: {}", r.root);
+    println!("{} files, {} bytes; {} text files, {} lines; {} symlink{} skipped",
+        r.files, r.bytes, r.text_files, r.text_lines, r.symlinks_skipped, plural(r.symlinks_skipped));
+    println!("categories:");
+    for (name, s) in &r.categories {
+        println!("  {name}: {} files, {} bytes, {} text lines", s.files, s.bytes, s.text_lines);
+    }
+    println!("kinds:");
+    for (kind, count) in &r.kinds { println!("  {kind}: {count}"); }
+    println!("duplicate groups: {} ({} redundant bytes)", r.duplicates.len(), r.duplicate_bytes);
+    for d in &r.duplicates {
+        println!("  {} — {} bytes each", d.blake3, d.bytes_each);
+        for path in &d.paths { println!("    {path}"); }
+    }
+}
+
+fn cmd_manifest(args: &[String]) {
+    let o = parse_opts(args);
+    let root = o.positionals.first().map(String::as_str)
+        .unwrap_or_else(|| die("usage: comms manifest <path> [--level minimal|full] [--out P]"));
+    let level = comms_core::archive::ManifestLevel::parse(o.get("--level").unwrap_or("minimal"))
+        .unwrap_or_else(|e| die(e));
+    let manifest = comms_core::archive::manifest(std::path::Path::new(root), level)
+        .unwrap_or_else(|e| die(format!("manifest failed: {e}")));
+    let rendered = serde_json::to_string_pretty(&manifest)
+        .unwrap_or_else(|e| die(format!("cannot render manifest: {e}")));
+    if let Some(out) = o.get("--out") {
+        write_out(out, format!("{rendered}\n").as_bytes());
+        println!("wrote {} manifest -> {out}", o.get("--level").unwrap_or("minimal"));
+    } else {
+        println!("{rendered}");
+    }
+}
+
 // ---- mint ------------------------------------------------------------------
 
 fn cmd_mint(args: &[String]) {
@@ -1095,6 +1175,156 @@ fn cmd_mint(args: &[String]) {
     restrict_permissions(out);
     println!("minted steward {id}");
     println!("key written to {out} (mode 0600); keep the seed secret");
+}
+
+// ---- pending appraisal -----------------------------------------------------
+
+fn default_pending_dirs() -> Vec<std::path::PathBuf> {
+    vec![".comms/pending", "continuity/pending"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
+fn pending_dirs(positionals: &[String]) -> Vec<std::path::PathBuf> {
+    if positionals.is_empty() {
+        default_pending_dirs()
+    } else {
+        positionals.iter().map(std::path::PathBuf::from).collect()
+    }
+}
+
+fn pending_json(v: &comms_core::signing::PendingView, include_body: bool) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "source": v.source,
+        "intended_store": v.intended_store,
+        "stem": v.stem,
+        "id": v.id,
+        "claim_type": v.claim_type,
+        "kind": v.kind,
+        "about": v.about,
+        "body_len": v.body_len,
+        "signatures": v.signatures,
+        "signatures_valid": v.signatures_valid,
+        "needs": v.needs.iter().map(|n| serde_json::json!({
+            "by": n.by, "role": n.role
+        })).collect::<Vec<_>>(),
+        "appraisal": v.appraisal.name(),
+        "clarification_id": v.clarification_id,
+    });
+    if include_body {
+        value["body_text"] = serde_json::json!(v.body_text);
+    }
+    value
+}
+
+fn select_pending<'a>(
+    views: &'a [comms_core::signing::PendingView],
+    selector: &str,
+) -> &'a comms_core::signing::PendingView {
+    let matches: Vec<_> = views
+        .iter()
+        .filter(|v| v.stem == selector || v.id == selector)
+        .collect();
+    match matches.as_slice() {
+        [one] => one,
+        [] => die(format!("no pending item matches '{selector}'")),
+        _ => die(format!("pending selector '{selector}' matches multiple inboxes; pass --pending DIR")),
+    }
+}
+
+fn cmd_pending(args: &[String]) {
+    let action = args.first().map(String::as_str).unwrap_or("list");
+    let o = parse_opts(if args.is_empty() { args } else { &args[1..] });
+    match action {
+        "list" => {
+            let dirs = pending_dirs(&o.positionals);
+            let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
+            if o.has("--json") {
+                let values: Vec<_> = views.iter().map(|v| pending_json(v, false)).collect();
+                println!("{}", serde_json::to_string_pretty(&values).unwrap());
+                return;
+            }
+            if views.is_empty() {
+                println!("no pending items in {}", dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", "));
+                return;
+            }
+            for v in &views {
+                println!("{}  {}", v.stem, v.id);
+                println!("  inbox: {} -> {}", v.source.display(), v.intended_store.display());
+                println!("  appraisal: {}  existing signatures: {} ({})",
+                    v.appraisal.name(), v.signatures,
+                    if v.signatures_valid { "valid" } else { "INVALID" });
+                for need in &v.needs {
+                    println!("  needs: {} as {}", need.by, need.role);
+                }
+                if let Some(id) = &v.clarification_id {
+                    println!("  clarification: {id}");
+                }
+            }
+        }
+        "inspect" => {
+            let selector = o.positionals.first().map(String::as_str)
+                .unwrap_or_else(|| die("usage: comms pending inspect <stem|id> [DIR]... [--json]"));
+            let dirs = pending_dirs(&o.positionals[1..]);
+            let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
+            let view = select_pending(&views, selector);
+            if o.has("--json") {
+                println!("{}", serde_json::to_string_pretty(&pending_json(view, true)).unwrap());
+            } else {
+                println!("{}  {}", view.stem, view.id);
+                println!("inbox: {}", view.source.display());
+                println!("destination: {}", view.intended_store.display());
+                println!("claim: {} / {} about {}",
+                    view.claim_type.as_deref().unwrap_or("unknown"),
+                    view.kind.as_deref().unwrap_or("unknown"),
+                    view.about.as_deref().unwrap_or("unknown"));
+                println!("appraisal: {}", view.appraisal.name());
+                println!("existing signatures: {} ({})", view.signatures,
+                    if view.signatures_valid { "valid" } else { "INVALID" });
+                for need in &view.needs { println!("needs {} as {}", need.by, need.role); }
+                println!("body ({} bytes):", view.body_len.unwrap_or(0));
+                println!("{}", view.body_text.as_deref().unwrap_or("[detached or binary]"));
+            }
+        }
+        "state" => {
+            let selector = o.positionals.first().map(String::as_str)
+                .unwrap_or_else(|| die("usage: comms pending state <stem|id> --state S [--pending DIR]"));
+            let dirs = o.get("--pending")
+                .map(|d| vec![std::path::PathBuf::from(d)])
+                .unwrap_or_else(default_pending_dirs);
+            let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
+            let view = select_pending(&views, selector);
+            let state = comms_core::signing::AppraisalState::parse(o.require("--state"))
+                .unwrap_or_else(|e| die(e));
+            let path = comms_core::signing::set_appraisal_state(&view.source, &view.stem, state, None)
+                .unwrap_or_else(|e| die(e));
+            println!("updated appraisal -> {}", path.display());
+        }
+        "clarify" => {
+            let selector = o.positionals.first().map(String::as_str)
+                .unwrap_or_else(|| die("usage: comms pending clarify <stem|id> --body F --key K [--pending DIR] [--store DIR]"));
+            let dirs = o.get("--pending")
+                .map(|d| vec![std::path::PathBuf::from(d)])
+                .unwrap_or_else(default_pending_dirs);
+            let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
+            let view = select_pending(&views, selector);
+            let body_path = o.require("--body");
+            let body = if body_path == "-" { read_stdin() } else { read_file(body_path) };
+            let key = comms_core::signing::load_signing_key(std::path::Path::new(o.require("--key")))
+                .unwrap_or_else(|e| die(e));
+            let store = o.get("--store").map(std::path::PathBuf::from)
+                .unwrap_or_else(|| view.intended_store.clone());
+            let out = comms_core::signing::request_clarification(
+                &view.source, &view.stem, &body, &key, &store, &now_rfc3339(),
+            ).unwrap_or_else(|e| die(e));
+            println!("clarification requested: {}", out.clarification_id);
+            println!("  pending core unchanged: {}", out.pending_id);
+            println!("  attestation: {}", out.stored_at.display());
+            println!("  appraisal: awaiting-clarification ({})", out.review_at.display());
+        }
+        _ => die(format!("unknown pending action '{action}' (use list, inspect, state, or clarify)")),
+    }
 }
 
 // ---- sign / finalize (the counterparty's half of a rite) --------------------
@@ -1134,7 +1364,8 @@ fn cmd_sign(args: &[String]) {
     let signer = personal_steward_id(sk.verifying_key().as_bytes());
     println!("signing as {signer}");
 
-    let outcomes = comms_core::signing::sign_pending(&pending, &sk).unwrap_or_else(|e| die(e));
+    let outcomes = comms_core::signing::sign_pending_selected(&pending, &sk, &o.items)
+        .unwrap_or_else(|e| die(e));
     if outcomes.is_empty() {
         println!("nothing pending in {}", pending.display());
         return;
@@ -1165,8 +1396,8 @@ fn cmd_finalize(args: &[String]) {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| pending.parent().unwrap_or(std::path::Path::new(".")).join("store"));
 
-    let outcomes =
-        comms_core::signing::finalize_pending(&pending, &store).unwrap_or_else(|e| die(e));
+    let outcomes = comms_core::signing::finalize_pending_selected(&pending, &store, &o.items)
+        .unwrap_or_else(|e| die(e));
     if outcomes.is_empty() {
         println!("nothing pending in {}", pending.display());
         return;

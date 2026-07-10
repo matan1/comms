@@ -46,12 +46,33 @@ pack    --out <bundle> [<att.cbor|dir>...] [--media F]...
                                  [--seal --key <k.json>] [--description S] [--*-at T]
 extract <bundle> --out <dir>     write each member <id>.cbor and media blob to disk
 mint    --out <k.json> [--label L]   generate a steward key for sealing
-sign    --key <path> [--pending DIR]  countersign staged pending items with an
+sign    --key <path> [--pending DIR] [--item ID]...  countersign selected or all
                                  OpenSSH ed25519 or steward key (the
                                  counterparty's half of a rite)
-finalize [--pending DIR] [--store DIR]  verify fully-signed pending items and
+finalize [--pending DIR] [--store DIR] [--item ID]...  verify selected or all and
                                  move them into the store under their id
+manifest <archive> [--level minimal|full]  deterministic archive disclosure
+pending list|inspect|state|clarify ...     appraisal before signing
 ```
+
+Selected signing and finalization use repeated `--item <stem|id>` arguments;
+unrelated pending items are neither blocked on nor swept into the transaction.
+`pending clarify` authors a signed question about an exact pending core while
+leaving the proposed act unchanged.
+
+### Optional appraisal workbench
+
+`comms-tui` is a separate workspace crate so Ratatui/Crossterm do not enter the
+portable core binary:
+
+```sh
+cargo build --release -p comms-tui
+rust/target/release/comms-tui [repo-root] --archive <archive-root> [--key <key>]
+```
+
+It browses minimal/full manifests, discovers modern and legacy pending inboxes,
+appraises items, requests signed clarification, and performs selected signing
+and finalization through the same `comms-core` operations as the CLI.
 
 ### init — install the door
 

@@ -1,7 +1,7 @@
 [workspace]
 # The root package (comms-core) plus the cargo task runner. Sharing one target/
 # keeps `cargo xtask` and the binary in step.
-members = ["xtask"]
+members = ["xtask", "tui"]
 
 [package]
 name = "comms-core"

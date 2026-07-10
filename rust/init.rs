@@ -411,6 +411,9 @@ projects worked by a succession of sessions (human or agent):
   behind a custodian-side door and is **requested, never auto-loaded**.
   Asking, granting, deferring, and declining are recorded, so the wall crossing
   stays visible and freedom stays load-bearing.
+- A minimal structural manifest may be deliberately inspected before choosing
+  what to request. It describes shape and health without titles, paths,
+  excerpts, rankings, or bodies; it is never injected into context.
 
 Layout:
 

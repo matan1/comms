@@ -1,0 +1,16 @@
+[package]
+name = "comms-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Optional appraisal workbench for Comms archives and pending attestations"
+
+[dependencies]
+comms-core = { path = ".." }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
+crossterm = "0.29.0"
+serde_json = "1"
+ed25519-dalek = "2"
+
+[[bin]]
+name = "comms-tui"
+path = "src/main.rs"

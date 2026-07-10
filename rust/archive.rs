@@ -21,7 +21,7 @@
 //! genesis/  frozen as ratified; intake never touches it
 //! ```
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
@@ -652,6 +652,510 @@ pub fn key_for_hash(hash: &[u8; 32]) -> String {
     format!("z{}", bs58::encode(hash).into_string())
 }
 
+// ---- catalog ---------------------------------------------------------------
+
+/// Read-only inventory for an archive-shaped or legacy directory. Unlike
+/// `audit`, this makes no claims about custody layout or attestation validity;
+/// it describes the bytes present so a viewer can decide what to inspect next.
+#[derive(Debug, Default)]
+pub struct CatalogReport {
+    pub root: String,
+    pub files: usize,
+    pub bytes: u64,
+    pub text_files: usize,
+    pub text_lines: u64,
+    pub symlinks_skipped: usize,
+    pub categories: BTreeMap<String, CatalogCategory>,
+    pub kinds: BTreeMap<String, usize>,
+    pub entries: Vec<CatalogEntry>,
+    pub duplicates: Vec<DuplicateGroup>,
+    pub duplicate_bytes: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct CatalogCategory {
+    pub files: usize,
+    pub bytes: u64,
+    pub text_files: usize,
+    pub text_lines: u64,
+}
+
+#[derive(Debug)]
+pub struct CatalogEntry {
+    pub path: String,
+    pub category: String,
+    pub bytes: u64,
+    pub blake3: String,
+    pub kind: String,
+    pub lines: Option<u64>,
+}
+
+#[derive(Debug)]
+pub struct DuplicateGroup {
+    pub blake3: String,
+    pub bytes_each: u64,
+    pub paths: Vec<String>,
+}
+
+/// Hash and classify every regular file below `root`, following no symlinks
+/// and writing nothing. Paths and maps are sorted for deterministic output.
+pub fn catalog(root: &Path) -> Result<CatalogReport, String> {
+    if !root.is_dir() {
+        return Err(format!("{} is not a directory", root.display()));
+    }
+    let canonical = root.canonicalize().map_err(|e| format!("{}: {e}", root.display()))?;
+    let mut paths = Vec::new();
+    let mut symlinks_skipped = 0;
+    collect_regular_files(&canonical, &mut paths, &mut symlinks_skipped)?;
+    paths.sort();
+
+    let mut report = CatalogReport {
+        root: canonical.to_string_lossy().into_owned(),
+        symlinks_skipped,
+        ..CatalogReport::default()
+    };
+    let mut by_hash: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
+
+    for path in paths {
+        let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let rel = path.strip_prefix(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
+        let rel_text = rel.to_string_lossy().replace('\\', "/");
+        let mut components = rel.components();
+        let first = components.next();
+        let category = if components.next().is_none() {
+            "(root)".to_owned()
+        } else {
+            first.map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .unwrap_or_else(|| "(root)".to_owned())
+        };
+        let kind = path.extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| "(none)".to_owned());
+        let size = data.len() as u64;
+        let digest = hex(blake3::hash(&data).as_bytes());
+        let lines = std::str::from_utf8(&data).ok().filter(|_| !data.contains(&0)).map(|_| {
+            if data.is_empty() { 0 } else {
+                data.iter().filter(|b| **b == b'\n').count() as u64
+                    + u64::from(data.last() != Some(&b'\n'))
+            }
+        });
+
+        report.files += 1;
+        report.bytes += size;
+        *report.kinds.entry(kind.clone()).or_default() += 1;
+        let summary = report.categories.entry(category.clone()).or_default();
+        summary.files += 1;
+        summary.bytes += size;
+        if let Some(n) = lines {
+            report.text_files += 1;
+            report.text_lines += n;
+            summary.text_files += 1;
+            summary.text_lines += n;
+        }
+        by_hash.entry(digest.clone()).or_default().push((rel_text.clone(), size));
+        report.entries.push(CatalogEntry {
+            path: rel_text,
+            category,
+            bytes: size,
+            blake3: digest,
+            kind,
+            lines,
+        });
+    }
+
+    for (digest, members) in by_hash {
+        if members.len() < 2 { continue; }
+        let size = members[0].1;
+        report.duplicate_bytes += size * (members.len() as u64 - 1);
+        report.duplicates.push(DuplicateGroup {
+            blake3: digest,
+            bytes_each: size,
+            paths: members.into_iter().map(|(path, _)| path).collect(),
+        });
+    }
+    Ok(report)
+}
+
+fn collect_regular_files(
+    dir: &Path,
+    files: &mut Vec<PathBuf>,
+    symlinks_skipped: &mut usize,
+) -> Result<(), String> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    entries.sort_by_key(|e| e.path());
+    for entry in entries {
+        let ty = entry.file_type().map_err(|e| format!("{}: {e}", entry.path().display()))?;
+        if ty.is_symlink() {
+            *symlinks_skipped += 1;
+        } else if ty.is_dir() {
+            collect_regular_files(&entry.path(), files, symlinks_skipped)?;
+        } else if ty.is_file() {
+            files.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+// ---- manifest --------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestLevel {
+    Minimal,
+    Full,
+}
+
+impl ManifestLevel {
+    pub fn parse(s: &str) -> Result<ManifestLevel, String> {
+        match s {
+            "minimal" => Ok(ManifestLevel::Minimal),
+            "full" => Ok(ManifestLevel::Full),
+            _ => Err(format!("manifest level must be minimal or full (got '{s}')")),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            ManifestLevel::Minimal => "minimal",
+            ManifestLevel::Full => "full",
+        }
+    }
+}
+
+/// Generate a deterministic archive view. The snapshot id commits to the full
+/// sorted inventory even when the minimal projection withholds its entries.
+pub fn manifest(root: &Path, level: ManifestLevel) -> Result<serde_json::Value, String> {
+    let report = manifest_catalog(root)?;
+    let snapshot_id = inventory_snapshot_id(&report.entries);
+    let sessions = discover_sessions(&report.entries);
+
+    let categories: serde_json::Map<String, serde_json::Value> = report
+        .categories
+        .iter()
+        .map(|(name, s)| {
+            (
+                name.clone(),
+                serde_json::json!({
+                    "files": s.files,
+                    "bytes": s.bytes,
+                    "text_files": s.text_files,
+                    "text_lines": s.text_lines,
+                }),
+            )
+        })
+        .collect();
+
+    let integrity = archive_integrity(root);
+    let mut out = serde_json::json!({
+        "schema": "comms.archive-manifest/1",
+        "level": level.name(),
+        "generator": {
+            "name": "comms",
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+        "snapshot": {
+            "id": snapshot_id,
+            "basis": "sorted(path, bytes, blake3)",
+        },
+        "scope": {
+            "represented_sessions": sessions.len(),
+            "first_session": sessions.first(),
+            "latest_session": sessions.last(),
+        },
+        "inventory": {
+            "files": report.files,
+            "bytes": report.bytes,
+            "text_files": report.text_files,
+            "text_lines": report.text_lines,
+            "categories": categories,
+            "kinds": report.kinds,
+            "duplicate_groups": report.duplicates.len(),
+            "duplicate_bytes": report.duplicate_bytes,
+            "symlinks_skipped": report.symlinks_skipped,
+        },
+        "integrity": integrity,
+        "access": {
+            "mode": "request",
+            "available_scopes": [
+                "full-manifest", "artifact", "artifact-set",
+                "reading-path", "full-archive"
+            ],
+        },
+        "limitations": [
+            "Counts describe present custody, not a complete history.",
+            "Presence and signature validity do not establish trust.",
+            "Views and interpretations are not custody.",
+            "The manifest is available by deliberate inspection, never injected context."
+        ],
+    });
+
+    if level == ManifestLevel::Full {
+        let mut artifacts = Vec::new();
+        let mut relationships = Vec::new();
+        for entry in &report.entries {
+            let mut artifact = serde_json::json!({
+                "path": entry.path,
+                "category": entry.category,
+                "bytes": entry.bytes,
+                "blake3": entry.blake3,
+                "kind": entry.kind,
+                "text_lines": entry.lines,
+            });
+            if let Some(meta) = attestation_manifest_metadata(root, entry, &mut relationships) {
+                artifact["attestation"] = meta;
+            }
+            artifacts.push(artifact);
+        }
+        let duplicates: Vec<_> = report
+            .duplicates
+            .iter()
+            .map(|d| serde_json::json!({
+                "blake3": d.blake3,
+                "bytes_each": d.bytes_each,
+                "paths": d.paths,
+            }))
+            .collect();
+        out["artifacts"] = serde_json::Value::Array(artifacts);
+        out["relationships"] = serde_json::Value::Array(relationships);
+        out["duplicates"] = serde_json::Value::Array(duplicates);
+        out["gaps"] = serde_json::Value::Array(manifest_gaps(root));
+    }
+    Ok(out)
+}
+
+fn manifest_catalog(root: &Path) -> Result<CatalogReport, String> {
+    let mut report = catalog(root)?;
+    if !declares_archive_profile(root) {
+        return Ok(report);
+    }
+    report.entries.retain(|entry| {
+        matches!(entry.category.as_str(), "store" | "bodies" | "genesis")
+    });
+    rebuild_catalog_summary(&mut report);
+    Ok(report)
+}
+
+fn rebuild_catalog_summary(report: &mut CatalogReport) {
+    report.files = 0;
+    report.bytes = 0;
+    report.text_files = 0;
+    report.text_lines = 0;
+    report.categories.clear();
+    report.kinds.clear();
+    report.duplicates.clear();
+    report.duplicate_bytes = 0;
+    let mut by_hash: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
+    for entry in &report.entries {
+        report.files += 1;
+        report.bytes += entry.bytes;
+        *report.kinds.entry(entry.kind.clone()).or_default() += 1;
+        let summary = report.categories.entry(entry.category.clone()).or_default();
+        summary.files += 1;
+        summary.bytes += entry.bytes;
+        if let Some(lines) = entry.lines {
+            report.text_files += 1;
+            report.text_lines += lines;
+            summary.text_files += 1;
+            summary.text_lines += lines;
+        }
+        by_hash
+            .entry(entry.blake3.clone())
+            .or_default()
+            .push((entry.path.clone(), entry.bytes));
+    }
+    for (blake3, members) in by_hash {
+        if members.len() < 2 {
+            continue;
+        }
+        let bytes_each = members[0].1;
+        report.duplicate_bytes += bytes_each * (members.len() as u64 - 1);
+        report.duplicates.push(DuplicateGroup {
+            blake3,
+            bytes_each,
+            paths: members.into_iter().map(|(path, _)| path).collect(),
+        });
+    }
+}
+
+fn inventory_snapshot_id(entries: &[CatalogEntry]) -> String {
+    let mut bytes = Vec::new();
+    for entry in entries {
+        for field in [entry.path.as_bytes(), entry.blake3.as_bytes()] {
+            bytes.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            bytes.extend_from_slice(field);
+        }
+        bytes.extend_from_slice(&entry.bytes.to_be_bytes());
+    }
+    format!(
+        "comms.manifest:{}",
+        crate::multibase_z(&crate::dsh(b"comms.archive-manifest/1", &bytes))
+    )
+}
+
+fn discover_sessions(entries: &[CatalogEntry]) -> Vec<u64> {
+    let mut found = BTreeSet::new();
+    for entry in entries {
+        let lower = entry.path.to_ascii_lowercase();
+        let mut rest = lower.as_str();
+        while let Some(pos) = rest.find("session") {
+            rest = &rest[pos + "session".len()..];
+            rest = rest.trim_start_matches(['-', '_', '.', ' ', '/']);
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = digits.parse::<u64>() {
+                found.insert(n);
+            }
+            if rest.is_empty() {
+                break;
+            }
+            rest = &rest[rest.chars().next().unwrap().len_utf8()..];
+        }
+    }
+    found.into_iter().collect()
+}
+
+fn archive_integrity(root: &Path) -> serde_json::Value {
+    if !declares_archive_profile(root) {
+        return serde_json::json!({
+            "available": false,
+            "reason": "root does not declare the archive profile"
+        });
+    }
+    match audit(&Archive::at(root)) {
+        Ok(r) => serde_json::json!({
+            "available": true,
+            "store_intact": r.store_intact,
+            "store_drift": r.store_drift.len(),
+            "bodies_intact": r.bodies_intact,
+            "bodies_drift": r.bodies_drift.len(),
+            "bodies_absent": r.bodies_absent.len(),
+            "bodies_unreferenced": r.bodies_unreferenced,
+        }),
+        Err(e) => serde_json::json!({"available": false, "reason": e}),
+    }
+}
+
+fn manifest_gaps(root: &Path) -> Vec<serde_json::Value> {
+    if !declares_archive_profile(root) {
+        return vec![serde_json::json!({
+            "class": "unappraised-legacy-layout",
+            "status": "unknown",
+            "reason": "structured gap appraisal requires the archive profile"
+        })];
+    }
+    let Ok(report) = audit(&Archive::at(root)) else {
+        return vec![serde_json::json!({
+            "class": "audit-unavailable",
+            "status": "unknown"
+        })];
+    };
+    let mut gaps = Vec::new();
+    for (path, reason) in report.store_drift {
+        gaps.push(serde_json::json!({
+            "class": "store-drift", "path": path,
+            "status": "retained", "reason": reason
+        }));
+    }
+    for (path, reason) in report.bodies_drift {
+        gaps.push(serde_json::json!({
+            "class": "body-mismatched", "path": path,
+            "status": "retained", "reason": reason
+        }));
+    }
+    for (attestation, body_b3) in report.bodies_absent {
+        gaps.push(serde_json::json!({
+            "class": "body-absent", "attestation": attestation,
+            "body_b3": body_b3, "status": "absent"
+        }));
+    }
+    if report.bodies_unreferenced > 0 {
+        gaps.push(serde_json::json!({
+            "class": "unreferenced-bodies",
+            "count": report.bodies_unreferenced,
+            "status": "testimony-or-orphan"
+        }));
+    }
+    gaps
+}
+
+fn declares_archive_profile(root: &Path) -> bool {
+    crate::config::load(&root.join(".comms"))
+        .map(|cfg| cfg.profile == "archive")
+        .unwrap_or(false)
+}
+
+fn attestation_manifest_metadata(
+    root: &Path,
+    entry: &CatalogEntry,
+    relationships: &mut Vec<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if entry.kind != "cbor" {
+        return None;
+    }
+    let bytes = std::fs::read(root.join(&entry.path)).ok()?;
+    let att = parse_attestation(&bytes).ok()?;
+    let id = att.id();
+    let claim = att.core.get("c")?;
+    let claim_type = claim.get("t").and_then(Value::as_text);
+    let kind = claim.get("kind").and_then(Value::as_text);
+    let about = claim.get("about").and_then(Value::as_text);
+    let support: Vec<String> = claim
+        .get("support")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_text).map(str::to_owned).collect())
+        .unwrap_or_default();
+    for target in &support {
+        relationships.push(serde_json::json!({
+            "source": id,
+            "target": target,
+            "role": "support",
+        }));
+    }
+    let refs: Vec<serde_json::Value> = att
+        .core
+        .get("r")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    let role = r.get("role").and_then(Value::as_text)?;
+                    let target = r.get("id").and_then(Value::as_text)?;
+                    relationships.push(serde_json::json!({
+                        "source": id,
+                        "target": target,
+                        "role": role,
+                    }));
+                    Some(serde_json::json!({"role": role, "id": target}))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let pseudo = Bundle {
+        attestations: vec![att.clone()],
+        media: HashMap::new(),
+        manifest: None,
+    };
+    let signatures_ok = inspect_bundle(&pseudo)
+        .members
+        .first()
+        .map(|m| m.all_signatures_ok)
+        .unwrap_or(false);
+    Some(serde_json::json!({
+        "id": id,
+        "claim_type": claim_type,
+        "kind": kind,
+        "about": about,
+        "support": support,
+        "refs": refs,
+        "signatures_ok": signatures_ok,
+        "signers": att.signatures.iter().map(|s| serde_json::json!({
+            "by": s.by, "role": s.role, "alg": s.alg
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 // ---- tests -----------------------------------------------------------------
 
 #[cfg(test)]
@@ -830,6 +1334,72 @@ mod tests {
         assert!(again.is_noop());
         assert!(again.custody_attestation.is_none());
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn catalog_is_read_only_deterministic_and_finds_duplicates() {
+        let root = scratch("catalog");
+        std::fs::create_dir_all(root.join("letters")).unwrap();
+        std::fs::create_dir_all(root.join("transcripts")).unwrap();
+        std::fs::write(root.join("letters/a.md"), b"same\ntext\n").unwrap();
+        std::fs::write(root.join("transcripts/a.log"), b"same\ntext\n").unwrap();
+        std::fs::write(root.join("transcripts/b.log"), [0, 1, 2]).unwrap();
+
+        let report = catalog(&root).unwrap();
+        assert_eq!(report.files, 3);
+        assert_eq!(report.text_files, 2);
+        assert_eq!(report.text_lines, 4);
+        assert_eq!(report.categories["letters"].files, 1);
+        assert_eq!(report.categories["transcripts"].files, 2);
+        assert_eq!(report.duplicates.len(), 1);
+        assert_eq!(report.duplicates[0].paths.len(), 2);
+        assert_eq!(report.duplicate_bytes, 10);
+        assert!(root.join("letters/a.md").is_file(), "catalog must not alter input");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn minimal_and_full_manifests_share_snapshot_without_leaking_inventory() {
+        let root = scratch("manifest");
+        std::fs::create_dir_all(root.join("letters")).unwrap();
+        std::fs::write(root.join("letters/session-012.sol.md"), b"a letter\n").unwrap();
+
+        let minimal = manifest(&root, ManifestLevel::Minimal).unwrap();
+        let full = manifest(&root, ManifestLevel::Full).unwrap();
+        assert_eq!(minimal["schema"], "comms.archive-manifest/1");
+        assert_eq!(minimal["level"], "minimal");
+        assert_eq!(full["level"], "full");
+        assert_eq!(minimal["snapshot"]["id"], full["snapshot"]["id"]);
+        assert_eq!(minimal["scope"]["represented_sessions"], 1);
+        assert_eq!(minimal["scope"]["first_session"], 12);
+        assert!(minimal.get("artifacts").is_none());
+        assert!(minimal.to_string().find("session-012.sol.md").is_none());
+        assert_eq!(full["artifacts"].as_array().unwrap().len(), 1);
+        assert_eq!(full["artifacts"][0]["path"], "letters/session-012.sol.md");
+        assert_eq!(full["gaps"][0]["class"], "unappraised-legacy-layout");
+
+        let again = manifest(&root, ManifestLevel::Minimal).unwrap();
+        assert_eq!(minimal, again, "unchanged custody must render byte-stably");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn archive_profile_manifest_excludes_undurable_views_and_its_own_output() {
+        let root = scratch("manifest-views");
+        std::fs::create_dir_all(root.join(".comms")).unwrap();
+        std::fs::write(
+            root.join(".comms/comms.toml"),
+            "schema = \"comms-harness/1\"\nprofile = \"archive\"\n",
+        ).unwrap();
+        std::fs::write(root.join("bodies/body.md"), b"durable\n").unwrap();
+        let first = manifest(&root, ManifestLevel::Minimal).unwrap();
+        std::fs::write(root.join("views/generated-manifest.json"), first.to_string()).unwrap();
+        let second = manifest(&root, ManifestLevel::Minimal).unwrap();
+        assert_eq!(first["snapshot"]["id"], second["snapshot"]["id"]);
+        assert!(second["inventory"]["categories"].get("views").is_none());
+        assert_eq!(second["inventory"]["files"], 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

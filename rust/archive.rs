@@ -631,6 +631,23 @@ pub fn audit(archive: &Archive) -> Result<AuditReport, String> {
                     }
                 }
             }
+            ContentReport::LegacyDetached { body_hash, status } => {
+                let h = hex(&body_hash);
+                match status {
+                    BodyStatus::Verified => {
+                        referenced.push(h);
+                        report.store_intact += 1;
+                    }
+                    BodyStatus::Absent => {
+                        report.store_intact += 1;
+                        report.bodies_absent.push((id, h));
+                    }
+                    BodyStatus::Mismatched => {
+                        referenced.push(h);
+                        report.store_intact += 1; // the attestation itself is intact
+                    }
+                }
+            }
             _ => report.store_intact += 1,
         }
     }

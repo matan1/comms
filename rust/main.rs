@@ -665,7 +665,8 @@ fn cmd_verify(args: &[String]) {
         .attestations
         .iter()
         .filter_map(|a| match content_report(a, &bundle.media) {
-            ContentReport::Detached { status, .. } => Some(status),
+            ContentReport::Detached { status, .. }
+            | ContentReport::LegacyDetached { status, .. } => Some(status),
             _ => None,
         })
         .collect();
@@ -735,6 +736,7 @@ fn inspect_ok(r: &InspectReport) -> bool {
                 m.content,
                 ContentReport::Malformed(_)
                     | ContentReport::Detached { status: BodyStatus::Mismatched, .. }
+                    | ContentReport::LegacyDetached { status: BodyStatus::Mismatched, .. }
             )
         })
         && r.media.iter().all(|(_, ok)| *ok)
@@ -764,6 +766,25 @@ fn print_inspect(r: &InspectReport) {
                     body_len,
                     plural(*body_len as usize),
                     hex_str(body_b3),
+                );
+                if *status == BodyStatus::Mismatched {
+                    println!(
+                        "      bytes at hand do not match the commitment — retained and \
+                         exportable, judge their provenance (A2.2)"
+                    );
+                }
+            }
+            ContentReport::LegacyDetached { body_hash, status } => {
+                let glyph = match status {
+                    BodyStatus::Verified => "✓",
+                    BodyStatus::Absent => "·",
+                    BodyStatus::Mismatched => "✗",
+                };
+                println!(
+                    "    {glyph} body [{}] detached (legacy body_hash, pre-A2 — hash-only \
+                     commitment), blake3 {}",
+                    status.as_str(),
+                    hex_str(body_hash),
                 );
                 if *status == BodyStatus::Mismatched {
                     println!(
@@ -808,6 +829,11 @@ fn inspect_json(r: &InspectReport) -> String {
                     "form": "detached",
                     "body_b3_hex": hex_str(body_b3),
                     "body_len": body_len,
+                    "body_status": status.as_str(),
+                }),
+                ContentReport::LegacyDetached { body_hash, status } => serde_json::json!({
+                    "form": "legacy-detached",
+                    "body_hash_hex": hex_str(body_hash),
                     "body_status": status.as_str(),
                 }),
                 ContentReport::Malformed(why) => {

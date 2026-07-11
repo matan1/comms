@@ -398,6 +398,11 @@ pub enum ContentReport {
     Embedded { len: usize },
     /// Detached body (A2.1): commitment carried, bytes judged separately.
     Detached { body_b3: [u8; 32], body_len: u64, status: BodyStatus },
+    /// Legacy detached body (genesis era, pre-A2): `body_hash` carries the
+    /// blake3 commitment with no length. Valid under the law of its issue —
+    /// history is judged as authored, not retroactively (constitution Art. 7).
+    /// New claims must use A2.1 `body_b3`/`body_len`.
+    LegacyDetached { body_hash: [u8; 32], status: BodyStatus },
     /// Layer-1 structural failure: both or neither of body/body_b3, missing
     /// body_len, wrong hash size. Distinct from Mismatched, which is a valid
     /// claim whose bytes have drifted.
@@ -422,6 +427,22 @@ pub fn content_report(att: &Attestation, bodies: &HashMap<String, Vec<u8>>) -> C
             ContentReport::Malformed("content carries both body and body_b3 (A2.1)".to_owned())
         }
         (None, None) => {
+            // Genesis-era detachment used `body_hash`: a hash-only commitment
+            // that predates A2's vocabulary. Recognized, not refused.
+            if let Some(h) = content.get("body_hash") {
+                let Some(hash) = h.as_bytes().and_then(|b| <[u8; 32]>::try_from(b).ok()) else {
+                    return ContentReport::Malformed(
+                        "legacy body_hash is not 32 bytes".to_owned(),
+                    );
+                };
+                let key = format!("z{}", bs58::encode(hash).into_string());
+                let status = match bodies.get(&key) {
+                    None => BodyStatus::Absent,
+                    Some(blob) if blake3::hash(blob).as_bytes() == &hash => BodyStatus::Verified,
+                    Some(_) => BodyStatus::Mismatched,
+                };
+                return ContentReport::LegacyDetached { body_hash: hash, status };
+            }
             ContentReport::Malformed("content carries neither body nor body_b3 (A2.1)".to_owned())
         }
         (Some(b), None) => {

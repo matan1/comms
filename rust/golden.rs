@@ -761,3 +761,32 @@ fn a2_body_status_and_negative_vectors() {
         assert!(why.contains(why_part), "{why}");
     }
 }
+
+/// Genesis-era claims committed to archived bodies with `body_hash` — a
+/// hash-only detachment that predates A2's `body_b3`/`body_len` vocabulary.
+/// History is judged under the law of its issue: the form is recognized as
+/// legacy-detached, never refused as malformed. The vector is the real
+/// genesis letter record (Framer, session 0), which ships with this repo.
+#[test]
+fn genesis_body_hash_detachment_is_recognized_not_refused() {
+    use comms_core::bundle::{content_report, parse_attestation, BodyStatus, ContentReport};
+
+    let bytes = std::fs::read(
+        "../continuity/store/z6X3zSzRzQxMqwUE4J6L8euskFWfFsvQwSQRTePwxjr9t.cbor",
+    )
+    .expect("genesis letter record ships with this repository");
+    let att = parse_attestation(&bytes).unwrap();
+
+    // No bytes at hand: absent — the normal state for an archive-held body.
+    let ContentReport::LegacyDetached { status, body_hash } =
+        content_report(&att, &HashMap::new())
+    else {
+        panic!("genesis letter record must judge as legacy-detached, not malformed");
+    };
+    assert_eq!(status, BodyStatus::Absent);
+    // The commitment is Framer's letter, exactly as the trial log records it.
+    assert_eq!(
+        hex::encode(body_hash),
+        "f5cace365e080f3a82d4a8ff6676761375dc91d970a95e8c65d8b9336b787d6e"
+    );
+}

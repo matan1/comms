@@ -73,3 +73,9 @@ default_access = "host-gated"
 filename = "session-{num:03}.{name_or_unnamed}.md"
 rites = ["archive"]
 required_for = []
+
+# A codicil: post-close testimony under a one-breath key, countersigned by
+# the custodian who witnessed the work (docs/comms-daemon.1.0.md). Annotates
+# the record; does not extend the lineage.
+[rites.codicil]
+steps = ["mint codicil", "attest work", "countersign codicil", "shred codicil"]

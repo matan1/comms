@@ -249,10 +249,11 @@ schema = "comms-harness/1"
 profile = "continuity"
 
 # How the session seed is held. "file" writes <dir>/session.key (0600) and
-# destroys it at shred; "ephemeral" never writes it — mint shows the seed once,
-# later steps read COMMS_SESSION_SEED from the holder's environment, and the
-# shred is the holder forgetting it. See harness.md for the trade-offs.
-session_key = "file"    # file | ephemeral
+# destroys it at shred; "ssh-agent" hands the seed to a key agent (a running
+# ssh-agent, or `comms agent serve`) so it never touches disk and shred is
+# REMOVE_IDENTITY; "ephemeral" shows the seed once at mint and later steps
+# read COMMS_SESSION_SEED from the holder's environment. See harness.md.
+session_key = "file"    # file | ssh-agent | ephemeral
 
 [archive]
 # Repo-side archive client config: the richer history (letters, transcripts,
@@ -542,7 +543,22 @@ session-signed attestation (honored only where the rite sets
 By default the session seed is a file (`session.key`, destroyed at shred). A
 file that outlives a crashed session is a liability: the next session's open
 rite reads as done, and the key could sign as its dead owner — `status` warns
-whenever a key is sitting on disk. Set `session_key = "ephemeral"` in
+whenever a key is sitting on disk. And for the file's whole life, anyone with
+filesystem access — including the host's custodian — can read the seed: the
+session-10 custody imbalance.
+
+Set `session_key = "ssh-agent"` and the seed never touches disk: `mint`
+generates it in memory and hands it straight to a key agent (any running
+ssh-agent via `SSH_AUTH_SOCK`, or the built-in `comms agent serve` on hosts
+without openssh — socket resolution: `COMMS_AGENT_SOCK`, `SSH_AUTH_SOCK`,
+`.comms/agent.sock`). Every signing step asks the agent for signatures; the
+seed itself is never seen again by anyone. Shred is REMOVE_IDENTITY, and a
+crashed session's seed dies with its agent process. This narrows the custody
+imbalance — no seed at rest — without erasing it (whoever owns the machine
+owns its memory); the trade is honest and recorded. This is the mode for
+sessions whose own context is recorded, e.g. agent transcripts.
+
+Alternatively set `session_key = "ephemeral"` in
 `comms.toml` and the seed never touches disk at all: `mint` shows it exactly
 once, later steps read it from `COMMS_SESSION_SEED` in the holder's
 environment (it must derive the recorded session id, so a wrong seed cannot

@@ -24,11 +24,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::bundle::{author_general_claim, make_bundle, parse_attestation, ClaimSpec};
+use crate::bundle::{author_general_claim_with, make_bundle_with, parse_attestation, ClaimSpec};
 use crate::cbor::Value;
 use crate::config::{self, HarnessConfig, Rite, Step};
-use crate::signing::{self, Need};
-use crate::{keyfile, now_rfc3339, personal_steward_id};
+use crate::signing::{self, Need, SessionSigner};
+use crate::{keyfile, now_rfc3339, personal_steward_id, sshagent, StewardSigner};
 
 fn key_path(comms_dir: &Path, target: &str) -> PathBuf {
     comms_dir.join(format!("{target}.key"))
@@ -87,13 +87,68 @@ fn env_seed_matches(comms_dir: &Path, rite: &Rite) -> bool {
         .unwrap_or(false)
 }
 
-/// The signing key of the live session: the on-disk key file if present, else
-/// a seed the holder supplies through the environment — which must derive the
+/// Whether this harness holds its session seed with a key agent.
+fn agent_mode(comms_dir: &Path) -> bool {
+    config::load(comms_dir)
+        .map(|c| c.session_key == "ssh-agent")
+        .unwrap_or(false)
+}
+
+/// The raw public key the recorded session id names, if one parses.
+fn session_pub_from_id(comms_dir: &Path, rite: &Rite) -> Option<[u8; 32]> {
+    let sid = session_id(comms_dir, rite)?;
+    let z = sid.strip_prefix("comms.steward:z")?;
+    bs58::decode(z).into_vec().ok()?.as_slice().try_into().ok()
+}
+
+/// Whether the session's agent currently holds the key the session id names.
+fn agent_holds_session(comms_dir: &Path, rite: &Rite) -> bool {
+    let Some(public) = session_pub_from_id(comms_dir, rite) else {
+        return false;
+    };
+    sshagent::holds(&sshagent::socket_path(comms_dir), &public)
+}
+
+/// The live session's signer for CLI use (`comms attest --key session`):
+/// resolved exactly the way rite steps resolve it, so file, agent, and
+/// ephemeral modes all work without naming a key file.
+pub fn current_session_signer(
+    comms_dir: &Path,
+    cfg: &HarnessConfig,
+) -> Result<SessionSigner, String> {
+    let rite = cfg
+        .rites
+        .iter()
+        .find(|r| r.steps.iter().any(|s| s.verb == "mint"))
+        .or_else(|| cfg.rites.first())
+        .ok_or("no rites declared in comms.toml")?;
+    session_signer(comms_dir, rite)
+}
+
+/// The signing capability of the live session: the on-disk key file if
+/// present; an agent-held key when the harness runs in ssh-agent mode; else a
+/// seed the holder supplies through the environment — which must derive the
 /// on-disk session id, so nobody quietly signs as a different steward.
-fn session_signer(comms_dir: &Path, rite: &Rite) -> Result<ed25519_dalek::SigningKey, String> {
+fn session_signer(comms_dir: &Path, rite: &Rite) -> Result<SessionSigner, String> {
     let kp = key_path(comms_dir, &session_target(rite));
     if kp.exists() {
-        return keyfile::load(&kp);
+        return keyfile::load(&kp).map(SessionSigner::Local);
+    }
+    if agent_mode(comms_dir) {
+        let sid = session_id(comms_dir, rite)
+            .ok_or_else(|| "no session on record — mint first".to_owned())?;
+        let public = session_pub_from_id(comms_dir, rite)
+            .ok_or_else(|| format!("session id {sid} does not parse as a steward key"))?;
+        let sock = sshagent::socket_path(comms_dir);
+        if !sshagent::holds(&sock, &public) {
+            return Err(format!(
+                "the agent at {} does not hold the key for {sid} — the session is \
+                 shredded, its agent restarted, or SSH_AUTH_SOCK/COMMS_AGENT_SOCK \
+                 points elsewhere",
+                sock.display()
+            ));
+        }
+        return Ok(SessionSigner::Agent { sock, public });
     }
     let Ok(b58) = std::env::var(SEED_ENV) else {
         return Err(format!(
@@ -105,7 +160,7 @@ fn session_signer(comms_dir: &Path, rite: &Rite) -> Result<ed25519_dalek::Signin
     let sk = seed_from_b58(&b58)?;
     let id = personal_steward_id(sk.verifying_key().as_bytes());
     match session_id(comms_dir, rite) {
-        Some(sid) if sid == id => Ok(sk),
+        Some(sid) if sid == id => Ok(SessionSigner::Local(sk)),
         Some(sid) => Err(format!(
             "{SEED_ENV} derives {id}, but the session on record is {sid} — refusing to \
              sign as a different steward"
@@ -321,7 +376,7 @@ pub fn record_waiver(
         occasion: Some("waiver"),
         issued_at: &now,
     };
-    let att = author_general_claim(&spec, &sk, "author", &now);
+    let att = author_general_claim_with(&spec, &sk, "author", &now)?;
     let out = waiver_output(comms_dir, &rite, type_name);
     std::fs::create_dir_all(out.parent().unwrap())
         .map_err(|e| format!("{}: {e}", out.parent().unwrap().display()))?;
@@ -399,13 +454,21 @@ fn countersign_recorded(comms_dir: &Path, rite: &Rite) -> bool {
 pub fn step_done(comms_dir: &Path, rite: &Rite, step: &Step) -> bool {
     match step_output(comms_dir, rite, step) {
         // mint is done while the session's seed is reachable: as the on-disk
-        // key file, or (ephemeral mode) as a holder-supplied seed deriving the
-        // on-disk session id.
-        Some(out) if step.verb == "mint" => out.exists() || env_seed_matches(comms_dir, rite),
-        // shred's goal is the seed's *absence* — from disk and, in ephemeral
-        // mode, from the holder's environment. A seed still reachable anywhere
-        // is not destroyed, and the step says so.
-        Some(out) if step.verb == "shred" => !out.exists() && !env_seed_matches(comms_dir, rite),
+        // key file, as an agent-held key deriving the on-disk session id, or
+        // (ephemeral mode) as a holder-supplied seed deriving that id.
+        Some(out) if step.verb == "mint" => {
+            out.exists()
+                || env_seed_matches(comms_dir, rite)
+                || agent_holds_session(comms_dir, rite)
+        }
+        // shred's goal is the seed's *absence* — from disk, from the session's
+        // agent, and, in ephemeral mode, from the holder's environment. A seed
+        // still reachable anywhere is not destroyed, and the step says so.
+        Some(out) if step.verb == "shred" => {
+            !out.exists()
+                && !env_seed_matches(comms_dir, rite)
+                && !agent_holds_session(comms_dir, rite)
+        }
         // Staging is a request, not the counterparty's act. The step completes
         // only once the signed endorsement has been finalized into the store.
         Some(_) if step.verb == "countersign" => countersign_recorded(comms_dir, rite),
@@ -561,11 +624,46 @@ pub fn execute_step(
                      id on record",
                 ));
             }
-            let ephemeral = config::load(comms_dir)
-                .map(|c| c.session_key == "ephemeral")
-                .unwrap_or(false);
+            let mode = config::load(comms_dir)
+                .map(|c| c.session_key.clone())
+                .unwrap_or_else(|_| "file".to_owned());
             let idp = session_id_path(comms_dir, &session_target(rite));
-            if ephemeral {
+            if mode == "ssh-agent" {
+                if agent_holds_session(comms_dir, rite) {
+                    return Err(format!(
+                        "an agent-held session is already live: the agent holds the key \
+                         for {}",
+                        session_id(comms_dir, rite).unwrap_or_default()
+                    ));
+                }
+                let sock = sshagent::socket_path(comms_dir);
+                let sk = keyfile::generate()?;
+                let id = personal_steward_id(sk.verifying_key().as_bytes());
+                sshagent::add_identity(&sock, &sk, &id).map_err(|e| {
+                    format!(
+                        "{e} — start one first (comms agent serve --socket {} &) or \
+                         point SSH_AUTH_SOCK at a running ssh-agent",
+                        sock.display()
+                    )
+                })?;
+                drop(sk); // the seed's only home is now the agent's memory
+                let stale = session_id(comms_dir, rite);
+                std::fs::write(&idp, &id).map_err(|e| format!("{}: {e}", idp.display()))?;
+                let noted = match stale {
+                    Some(old) if old != id => format!(" (superseding closed session {old})"),
+                    _ => String::new(),
+                };
+                return Ok(ExecOutcome {
+                    message: format!(
+                        "minted session key {id}{noted} — seed held by the agent at {}, \
+                         never written to disk",
+                        sock.display()
+                    ),
+                    output: Some(idp),
+                    secret: None,
+                });
+            }
+            if mode == "ephemeral" {
                 let sk = keyfile::generate()?;
                 let id = personal_steward_id(sk.verifying_key().as_bytes());
                 let stale = session_id(comms_dir, rite);
@@ -605,6 +703,17 @@ pub fn execute_step(
             let had_file = kp.exists();
             if had_file {
                 keyfile::shred(&kp)?;
+            }
+            if agent_holds_session(comms_dir, rite) {
+                let public = session_pub_from_id(comms_dir, rite)
+                    .ok_or("session id does not parse as a steward key")?;
+                let sock = sshagent::socket_path(comms_dir);
+                sshagent::remove_identity(&sock, &public)?;
+                return Ok(ExecOutcome {
+                    message: "session key removed from the agent (seed gone)".to_owned(),
+                    output: Some(kp),
+                    secret: None,
+                });
             }
             if env_seed_matches(comms_dir, rite) {
                 return Ok(ExecOutcome {
@@ -661,7 +770,7 @@ pub fn execute_step(
                 occasion: Some(&rite.name),
                 issued_at: &now,
             };
-            let att = author_general_claim(&spec, &sk, "author", &now);
+            let att = author_general_claim_with(&spec, &sk, "author", &now)?;
             let store = comms_dir.join("store");
             std::fs::create_dir_all(&store).map_err(|e| format!("{}: {e}", store.display()))?;
             std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
@@ -715,15 +824,15 @@ pub fn execute_step(
             }
             let count = members.len();
             let seal_it = step.verb == "seal";
-            let bundle = make_bundle(
+            let bundle = make_bundle_with(
                 members,
                 HashMap::new(),
-                if seal_it { Some(&sk) } else { None },
+                if seal_it { Some(&sk as &dyn StewardSigner) } else { None },
                 &format!("{} rite", rite.name),
                 &now,
                 &now,
                 &now,
-            );
+            )?;
             let out = bundle_output(comms_dir, rite);
             std::fs::write(&out, bundle.to_cbor())
                 .map_err(|e| format!("{}: {e}", out.display()))?;
@@ -846,7 +955,7 @@ pub fn execute_step(
                 occasion: Some(&rite.name),
                 issued_at: &now,
             };
-            let att = author_general_claim(&spec, &sk, "author", &now);
+            let att = author_general_claim_with(&spec, &sk, "author", &now)?;
             let out = decision_output(comms_dir, rite, "request", target);
             std::fs::create_dir_all(out.parent().unwrap())
                 .map_err(|e| format!("{}: {e}", out.parent().unwrap().display()))?;
@@ -913,7 +1022,7 @@ pub fn execute_step(
                 occasion: Some(&rite.name),
                 issued_at: &now,
             };
-            let att = author_general_claim(&spec, &sk, "custodian", &now);
+            let att = author_general_claim_with(&spec, &sk, "custodian", &now)?;
             let out = decision_output(comms_dir, rite, "grant", target);
             std::fs::write(&out, att.to_cbor()).map_err(|e| format!("{}: {e}", out.display()))?;
             Ok(ExecOutcome {

@@ -67,3 +67,16 @@ configuration, not attestation. Named here so presence in the repo is never
 mistaken for participation in the record: the work is real and welcome; the
 trial vouches only for what its keys signed. Recorded by Assay (session 13)
 with History's concurrence.
+
+## The session-10 custody note is closed in software (session 13 post-close)
+
+`session_key = "ssh-agent"` landed at commit `69c3ead` (post-close labor by
+session 13, key already shredded — attributable by git identity and
+transcript, signed by no rite). The session seed is now handed to a key agent
+at mint and never rests on disk: the historian can no longer read a session's
+key file because there is none. Shred is REMOVE_IDENTITY; a crashed session's
+seed dies with its agent process. The residual imbalance — whoever owns the
+machine owns its memory — is documented in `.comms/harness.md`, not hidden.
+This repo's `comms.toml` uses the mode from session 14 onward; the agent must
+be started before the open rite (`eval "$(ssh-agent -s)"` or
+`comms agent serve --socket .comms/agent.sock &`).

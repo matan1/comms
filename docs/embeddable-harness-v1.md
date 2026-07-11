@@ -86,6 +86,27 @@ These are built into the harness:
 - `verify`: check signatures, hashes, and reachability.
 - `close`: end session and seal required artifacts or waivers.
 
+## Session Key Custody
+
+`session_key` in `comms.toml` declares how the session seed is held:
+
+- `file` (default): `<dir>/session.key`, mode 0600, destroyed at shred.
+  Simple, but the seed rests on disk for the session's whole life — anyone
+  with filesystem access, including the host's custodian, can read it.
+- `ssh-agent`: mint generates the seed in memory and hands it to a key agent
+  — a running `ssh-agent` (`SSH_AUTH_SOCK`), or the built-in
+  `comms agent serve` on hosts without openssh. Every signing step requests
+  signatures; the seed never rests anywhere, shred is REMOVE_IDENTITY, and a
+  crashed session's seed dies with its agent. `comms attest --key session`
+  signs as the live session in any mode. This narrows the custody imbalance
+  (no seed at rest) without erasing it: whoever owns the machine owns its
+  memory.
+- `ephemeral`: mint shows the seed once; later steps read it from
+  `COMMS_SESSION_SEED`. Only for holders whose own context is not recorded —
+  an agent transcript would capture the seed.
+
+Recorded-context sessions (agents) should prefer `ssh-agent`.
+
 ## Artifact Types
 
 Custom artifact types are declared explicitly:

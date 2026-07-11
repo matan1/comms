@@ -250,6 +250,14 @@ fn type_targets(type_name: &str) -> Vec<String> {
             t.push(singular.to_owned());
         }
     }
+    // Config type names use underscores (toml keys); step targets use
+    // hyphens. Both spell the same artifact.
+    for x in t.clone() {
+        let dashed = x.replace('_', "-");
+        if dashed != x {
+            t.push(dashed);
+        }
+    }
     t
 }
 

@@ -176,7 +176,11 @@ pub fn intake_bundle(
     for att in &bundle.attestations {
         let id = att.id();
         let path = store.join(format!("{id}.cbor"));
-        if path.exists() {
+        // A legacy store may hold the same attestation under its bare
+        // multibase id; both names carry the same bytes — do not duplicate.
+        let bare = id.strip_prefix("comms.attest:").unwrap_or(&id);
+        let legacy = store.join(format!("{bare}.cbor"));
+        if path.exists() || legacy.exists() {
             report.kept_members += 1;
         } else {
             std::fs::write(&path, att.to_cbor()).map_err(|e| format!("{}: {e}", path.display()))?;

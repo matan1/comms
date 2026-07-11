@@ -817,7 +817,7 @@ impl ManifestLevel {
         }
     }
 
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             ManifestLevel::Minimal => "minimal",
             ManifestLevel::Full => "full",

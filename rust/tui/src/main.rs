@@ -173,6 +173,18 @@ impl App {
         }
     }
 
+    fn export_manifest(&mut self) {
+        if self.manifest.is_empty() {
+            self.status = "no manifest to export".into();
+            return;
+        }
+        let path = format!("manifest.{}.json", self.manifest_level.name());
+        match std::fs::write(&path, &self.manifest) {
+            Ok(()) => self.status = format!("exported {} manifest -> {path}", self.manifest_level.name()),
+            Err(e) => self.status = format!("export failed: {e}"),
+        }
+    }
+
     fn selected(&self) -> Option<&PendingView> {
         self.pending.get(self.selected)
     }
@@ -310,6 +322,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> io::Result<()>
                         app.refresh();
                         app.status = "refreshed".into();
                     }
+                    KeyCode::Char('e') if app.tab == Tab::Manifest => {
+                        app.export_manifest();
+                    }
                     KeyCode::Char('m') if app.tab == Tab::Manifest => {
                         app.manifest_level = if app.manifest_level == ManifestLevel::Minimal {
                             ManifestLevel::Full
@@ -376,7 +391,7 @@ fn render(frame: &mut Frame, app: &App) {
     let help_text = if app.tab == Tab::Pending {
         "Tab manifest | j/k move | a approve d defer x decline Q quarantine | c clarify | s sign | f finalize | r refresh | q quit"
     } else {
-        "Tab pending | j/k scroll | m minimal/full (deliberate disclosure) | r refresh | q quit"
+        "Tab pending | j/k scroll | m minimal/full (deliberate disclosure) | e export to file | r refresh | q quit"
     };
     frame.render_widget(
         Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray)),

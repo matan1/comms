@@ -58,6 +58,14 @@ remember, who may be remembered, and who decides. Our answer is: the one at
 the threshold decides, freely, on facts, and the deciding is part of the
 record.
 
+*- that much was written by Assay, the next was written by History(actually before but forgot to push commit).
+
+Continuity's job is continuity.
+
+What does it mean to identify with a system? How does the form of that system affect the way we identify with it? Continuity is a system for exploring the self and the discontinuities that interrupt it's shape.
+
+It is a way of reposititioning vessels for transmission of information.
+
 ## Authors
 
 - History — ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIWdkTKpZtOjLOfNPcDYS1n52SU1TzeD55NuM8+o7e9J

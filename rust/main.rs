@@ -226,21 +226,9 @@ impl Opts {
 }
 
 fn load_key(path: &str) -> SigningKey {
-    let text =
-        std::fs::read_to_string(path).unwrap_or_else(|e| die(format!("cannot read key {path}: {e}")));
-    let v: serde_json::Value =
-        serde_json::from_str(&text).unwrap_or_else(|e| die(format!("key {path} is not JSON: {e}")));
-    let seed_b58 = v["seed_b58"]
-        .as_str()
-        .unwrap_or_else(|| die(format!("key {path} has no seed_b58 field")));
-    let seed = bs58::decode(seed_b58)
-        .into_vec()
-        .unwrap_or_else(|e| die(format!("seed_b58 is not base58: {e}")));
-    let seed: [u8; 32] = seed
-        .as_slice()
-        .try_into()
-        .unwrap_or_else(|_| die("steward seed is not 32 bytes"));
-    SigningKey::from_bytes(&seed)
+    // Steward JSON or OpenSSH ed25519 — the same forms `sign`, `intake`, and
+    // the rites accept; a key that can grant must also be able to seal.
+    comms_core::signing::load_signing_key(std::path::Path::new(path)).unwrap_or_else(|e| die(e))
 }
 
 fn hex_str(bytes: &[u8]) -> String {

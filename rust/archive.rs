@@ -551,7 +551,10 @@ pub fn audit(archive: &Archive) -> Result<AuditReport, String> {
             };
             let id = att.id();
             let stem = name.strip_suffix(".cbor").unwrap_or(&name);
-            if stem != id {
+            // Legacy stores name files by the bare multibase id, without the
+            // `comms.attest:` scheme prefix; both forms name the same bytes.
+            let bare = id.strip_prefix("comms.attest:").unwrap_or(&id);
+            if stem != id && stem != bare {
                 report.store_drift.push((
                     name.clone(),
                     format!("bytes derive {id}, not their name — retained"),
@@ -1353,6 +1356,40 @@ mod tests {
         std::fs::remove_file(&body_path).unwrap();
         let absent = audit(&archive).unwrap();
         assert!(absent.bodies_absent.iter().any(|(_, hash)| hash == &h));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn audit_accepts_legacy_bare_id_store_names_as_intact() {
+        let root = scratch("audit-legacy-names");
+        let archive = Archive::at(&root);
+        let att = detached_member(b"legacy-named testimony", "letter/legacy", &key(1));
+        let id = att.id();
+        let bare = id.strip_prefix("comms.attest:").unwrap().to_owned();
+
+        // Same bytes under both naming conventions: the scheme-prefixed form
+        // and the bare multibase id the legacy continuity store used.
+        std::fs::write(root.join("store").join(format!("{id}.cbor")), att.to_cbor()).unwrap();
+        let prefixed_only = audit(&archive).unwrap();
+        assert_eq!(prefixed_only.store_drift.len(), 0);
+
+        std::fs::remove_file(root.join("store").join(format!("{id}.cbor"))).unwrap();
+        std::fs::write(root.join("store").join(format!("{bare}.cbor")), att.to_cbor()).unwrap();
+        let bare_only = audit(&archive).unwrap();
+        assert_eq!(
+            bare_only.store_drift.len(),
+            0,
+            "bare-id filenames name the same bytes and are not drift: {:?}",
+            bare_only.store_drift
+        );
+
+        // A genuinely wrong name must still be reported — and retained.
+        let wrong = root.join("store").join("zWrongName.cbor");
+        std::fs::write(&wrong, att.to_cbor()).unwrap();
+        let drift = audit(&archive).unwrap();
+        assert_eq!(drift.store_drift.len(), 1);
+        assert!(wrong.is_file(), "audit must retain misnamed bytes");
 
         let _ = std::fs::remove_dir_all(&root);
     }

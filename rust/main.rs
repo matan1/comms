@@ -582,7 +582,14 @@ fn cmd_next(args: &[String]) {
 
     let view = rites::rite_view(&comms_dir, rite);
     let Some(i) = view.next else {
-        die(format!("rite '{}' is already complete", rite.name));
+        let session = rites::session_id(&comms_dir, rite)
+            .unwrap_or_else(|| "no session on record".to_owned());
+        die(format!(
+            "rite '{}' is already complete for session {session} — if that is \
+             not the session you meant to act on, this checkout is stale: pull \
+             the session's branch and check .comms/session.id",
+            rite.name
+        ));
     };
     let step = &rite.steps[i];
 

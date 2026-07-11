@@ -14,6 +14,7 @@ pub mod init;
 pub mod keyfile;
 pub mod rites;
 pub mod signing;
+pub mod sshagent;
 pub mod steward;
 pub mod trial_log;
 pub mod vouch;
@@ -116,6 +117,26 @@ pub fn sig_payload(
     cbor::encode(&Value::Map(entries))
 }
 
+/// Anything that can sign for a personal steward identity: a local seed, or a
+/// key held by an agent that signs on the session's behalf so the seed never
+/// touches disk (the session-10 custody fix).
+pub trait StewardSigner {
+    fn public_bytes(&self) -> [u8; 32];
+    fn try_sign(&self, payload: &[u8]) -> Result<[u8; 64], String>;
+    fn steward_id(&self) -> String {
+        personal_steward_id(&self.public_bytes())
+    }
+}
+
+impl StewardSigner for SigningKey {
+    fn public_bytes(&self) -> [u8; 32] {
+        *self.verifying_key().as_bytes()
+    }
+    fn try_sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+        Ok(self.sign(payload).to_bytes())
+    }
+}
+
 /// Sign an attestation core with a personal (single-key) steward identity.
 pub fn personal_sign(
     core: &Value,
@@ -126,6 +147,19 @@ pub fn personal_sign(
     let by = personal_steward_id(sk.verifying_key().as_bytes());
     let payload = sig_payload(&core_hash(core), &by, "ed25519", role, signed_at, None);
     sk.sign(&payload).to_bytes()
+}
+
+/// `personal_sign` for any signer, local or agent-held. Fallible because the
+/// agent may be gone — which is exactly the state a shredded session is in.
+pub fn personal_sign_with(
+    core: &Value,
+    signer: &dyn StewardSigner,
+    role: &str,
+    signed_at: &str,
+) -> Result<[u8; 64], String> {
+    let by = signer.steward_id();
+    let payload = sig_payload(&core_hash(core), &by, "ed25519", role, signed_at, None);
+    signer.try_sign(&payload)
 }
 
 /// Verify a personal signature object's fields against a core.

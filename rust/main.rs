@@ -60,6 +60,7 @@ fn main() {
         Some("manifest") => cmd_manifest(&argv[1..]),
         Some("trial-log") => cmd_trial_log(&argv[1..]),
         Some("pending") => cmd_pending(&argv[1..]),
+        Some("agent") => cmd_agent(&argv[1..]),
         Some("mint") => cmd_mint(&argv[1..]),
         Some("waive") => cmd_waive(&argv[1..]),
         Some("sign") => cmd_sign(&argv[1..]),
@@ -106,6 +107,8 @@ fn usage_text() -> String {
          \x20 trial-log [dir] [--session N] [--out P] [--force]\n\
          \x20         render a Continuity Trial log stub from signed store evidence\n\
          \x20 pending list|inspect|state|clarify ...  appraise proposed acts\n\
+         \x20 agent   serve|list [--socket PATH]  built-in key agent (ssh-agent\n\
+         \x20         protocol): session seeds live in its memory, never on disk\n\
          \x20 mint    --out <key.json> [--label L]   generate a steward key for sealing\n\
          \x20 waive   <type> [dir] --body <reason>   record that this session cannot\n\
          \x20         produce a required artifact (the gap becomes an attestation)\n\
@@ -144,6 +147,7 @@ fn help_for(cmd: &str) -> String {
         "trial-log" => "comms trial-log [repo-root] [--session N] [--out P] [--force]\n  Render a Continuity Trial log stub from a verified, session-signed opening\n  entry. Auto-fills evidence IDs and leaves History's observations as [History].\n  Output is stdout unless --out is given; existing files require --force.\n",
         "pending" => "comms pending list [DIR]... [--json]\ncomms pending inspect <stem|id> [DIR]... [--json]\ncomms pending state <stem|id> --state S [--pending DIR]\ncomms pending clarify <stem|id> --body F --key K [--pending DIR] [--store DIR]\n  Discover and appraise proposed signing acts without conflating inboxes.\n  Clarification creates a signed question and leaves the pending core unchanged.\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
+        "agent" => "comms agent serve|list [--socket PATH]\n  serve: run the built-in key agent (ssh-agent protocol; seeds live only in\n  its memory — its death is a shred). list: show held identities.\n  Socket resolution: --socket, $COMMS_AGENT_SOCK, $SSH_AUTH_SOCK,\n  .comms/agent.sock. With session_key = \"ssh-agent\" in comms.toml, mint\n  hands the session seed to this agent and no key file ever exists.\n",
         "waive" => "comms waive <type> [dir] --body <reason file|->\n  Record a session-signed waiver: this session cannot produce a declared\n  `required_for` artifact, and says so on the record instead of being blocked.\n  Only rites with `allow_waivers = true` accept it at seal.\n",
         "sign" => "comms sign --key <path> [--pending DIR] [--item STEM|ID]...\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. --item creates a bounded signing\n  plan; omitted, every item in the explicitly resolved inbox is considered.\n",
         "finalize" => "comms finalize [--pending DIR] [--store DIR] [--item STEM|ID]...\n  Verify and move every or only explicitly selected fully-signed item into the\n  store. Selected finalization is atomic and unrelated inbox items cannot block\n  or be swept into it.\n",
@@ -300,7 +304,21 @@ fn cmd_init(args: &[String]) {
 
 fn cmd_attest(args: &[String]) {
     let o = parse_opts(args);
-    let sk = load_key(o.require("--key"));
+    // `--key session` signs as the live session however the harness holds its
+    // seed (file, agent, or ephemeral) — required in ssh-agent mode, where no
+    // key file exists to point at.
+    let key_arg = o.require("--key");
+    let sk: Box<dyn comms_core::StewardSigner> = if key_arg == "session" {
+        let comms_dir = std::path::PathBuf::from(".comms");
+        let cfg = comms_core::config::load(&comms_dir).unwrap_or_else(|e| die(e));
+        Box::new(
+            comms_core::rites::current_session_signer(&comms_dir, &cfg)
+                .unwrap_or_else(|e| die(e)),
+        )
+    } else {
+        Box::new(load_key(key_arg))
+    };
+    let sk = sk.as_ref();
     let about = o.require("--about");
     let kind = o.get("--kind").unwrap_or("testimony");
     let role = o.get("--role").unwrap_or("author");
@@ -332,7 +350,8 @@ fn cmd_attest(args: &[String]) {
         occasion: o.get("--occasion"),
         issued_at,
     };
-    let att = author_general_claim(&spec, &sk, role, signed_at);
+    let att = comms_core::bundle::author_general_claim_with(&spec, sk, role, signed_at)
+        .unwrap_or_else(|e| die(e));
     let id = att.id();
     let out = o
         .get("--out")
@@ -353,10 +372,7 @@ fn cmd_attest(args: &[String]) {
     } else {
         println!("  kind: {kind}   about: {about}   ({} body bytes, {media_type})", body.len());
     }
-    println!(
-        "  signed by {} as '{role}' -> {out}",
-        personal_steward_id(sk.verifying_key().as_bytes())
-    );
+    println!("  signed by {} as '{role}' -> {out}", sk.steward_id());
 }
 
 fn read_stdin() -> Vec<u8> {
@@ -464,6 +480,36 @@ fn cmd_status(args: &[String]) {
             .unwrap_or_else(|| "unknown time".to_owned());
         println!("\n  session key on disk since {since} — shredded at close; if that");
         println!("  session is not yours, shred before opening a new one.");
+    }
+
+    // Agent-held sessions have no key file; report where the seed lives so
+    // the operator can see the custody state at a glance.
+    if let Ok(cfg) = comms_core::config::load(&comms_dir) {
+        if cfg.session_key == "ssh-agent" {
+            let sock = comms_core::sshagent::socket_path(&comms_dir);
+            let sid = std::fs::read_to_string(comms_dir.join("session.id"))
+                .map(|s| s.trim().to_owned())
+                .unwrap_or_default();
+            let held = sid
+                .strip_prefix("comms.steward:z")
+                .and_then(|z| bs58::decode(z).into_vec().ok())
+                .and_then(|v| <[u8; 32]>::try_from(v.as_slice()).ok())
+                .map(|pk| comms_core::sshagent::holds(&sock, &pk))
+                .unwrap_or(false);
+            if held {
+                println!(
+                    "\n  session seed held by the agent at {} — never on disk;",
+                    sock.display()
+                );
+                println!("  shred removes it from the agent at close.");
+            } else if !sid.is_empty() {
+                println!(
+                    "\n  ssh-agent mode: no agent at {} holds the recorded session key —",
+                    sock.display()
+                );
+                println!("  the session is closed, or its agent is gone (a dead agent is a shred).");
+            }
+        }
     }
 
     // Staged items awaiting a counterparty are a rite position too — show
@@ -1244,6 +1290,35 @@ fn cmd_trial_log(args: &[String]) {
 }
 
 // ---- mint ------------------------------------------------------------------
+
+fn cmd_agent(args: &[String]) {
+    let o = parse_opts(args);
+    let comms_dir = std::path::PathBuf::from(".comms");
+    let sock = o
+        .get("--socket")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| comms_core::sshagent::socket_path(&comms_dir));
+    match o.positionals.first().map(String::as_str) {
+        Some("serve") => {
+            // Foreground by design: the harness backgrounds it, and the
+            // process's death is the shred of last resort for every seed it
+            // holds. Works anywhere; a real ssh-agent (SSH_AUTH_SOCK) serves
+            // the same role when present.
+            println!("comms agent listening at {} (seeds live only in this process)", sock.display());
+            comms_core::sshagent::serve(&sock).unwrap_or_else(|e| die(e));
+        }
+        Some("list") => match comms_core::sshagent::list(&sock) {
+            Ok(ids) if ids.is_empty() => println!("agent at {} holds no keys", sock.display()),
+            Ok(ids) => {
+                for (public, comment) in ids {
+                    println!("{}  {comment}", personal_steward_id(&public));
+                }
+            }
+            Err(e) => die(e),
+        },
+        _ => die("usage: comms agent serve|list [--socket PATH]"),
+    }
+}
 
 fn cmd_mint(args: &[String]) {
     let o = parse_opts(args);

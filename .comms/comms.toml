@@ -4,11 +4,14 @@ schema = "comms-harness/1"
 profile = "continuity"
 
 # How the session seed is held: "file" (session.key on disk, destroyed at
-# shred) or "ephemeral" (never written; mint shows it once and later steps
-# read COMMS_SESSION_SEED). This trial keeps file mode: its session holders
-# are agents whose context is itself recorded, so a seed passing through the
-# environment would land in the transcript — see harness.md.
-session_key = "file"    # file | ephemeral
+# shred), "ssh-agent" (seed handed to a key agent at mint, never on disk;
+# shred is REMOVE_IDENTITY), or "ephemeral" (mint shows the seed once; steps
+# read COMMS_SESSION_SEED). This trial uses ssh-agent mode as of session 13:
+# it closes the session-10 custody note — no seed at rest for the custodian
+# to read — without the seed passing through a recorded environment. Start
+# the agent before the open rite: a running ssh-agent, or
+# `comms agent serve --socket .comms/agent.sock &`. See harness.md.
+session_key = "ssh-agent"    # file | ssh-agent | ephemeral
 
 [archive]
 # The richer history (letters, transcripts, memories) lives outside the repo and
@@ -70,3 +73,9 @@ default_access = "host-gated"
 filename = "session-{num:03}.{name_or_unnamed}.md"
 rites = ["archive"]
 required_for = []
+
+# A codicil: post-close testimony under a one-breath key, countersigned by
+# the custodian who witnessed the work (docs/comms-daemon.1.0.md). Annotates
+# the record; does not extend the lineage.
+[rites.codicil]
+steps = ["mint codicil", "attest work", "countersign codicil", "shred codicil"]

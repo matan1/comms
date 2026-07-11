@@ -225,6 +225,36 @@ pub fn request_clarification(
     Ok(ClarificationOutcome { pending_id, clarification_id, stored_at, review_at })
 }
 
+/// The live session's signing capability: a locally held seed, or a key an
+/// agent holds on the session's behalf so the seed never rests on disk (the
+/// session-10 custody fix). Everything downstream signs through the
+/// `StewardSigner` trait and cannot tell the difference.
+pub enum SessionSigner {
+    Local(SigningKey),
+    Agent {
+        sock: std::path::PathBuf,
+        public: [u8; 32],
+    },
+}
+
+impl crate::StewardSigner for SessionSigner {
+    fn public_bytes(&self) -> [u8; 32] {
+        match self {
+            SessionSigner::Local(sk) => *sk.verifying_key().as_bytes(),
+            SessionSigner::Agent { public, .. } => *public,
+        }
+    }
+    fn try_sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+        match self {
+            SessionSigner::Local(sk) => {
+                use ed25519_dalek::Signer as _;
+                Ok(sk.sign(payload).to_bytes())
+            }
+            SessionSigner::Agent { sock, public } => crate::sshagent::sign(sock, public, payload),
+        }
+    }
+}
+
 /// Load a signing key from either format a counterparty plausibly holds: a
 /// steward `{seed_b58, label}` JSON file, or an OpenSSH ed25519 private key
 /// (A1.3 chose pure Ed25519 exactly so keys people already have can

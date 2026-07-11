@@ -11,10 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use ed25519_dalek::SigningKey;
 
-use crate::{
-    attestation_id, cbor, dsh, personal_sign, personal_steward_id, personal_verify, Value,
-    CTX_BUNDLE,
-};
+use crate::{attestation_id, cbor, dsh, personal_verify, Value, CTX_BUNDLE};
 use crate::steward::{verify_community_attestation, Attestation, SignatureObject};
 
 pub const BUNDLE_TYPE: &str = "comms.bundle/1";
@@ -653,7 +650,20 @@ pub fn build_seal(
     issued_at: &str,
     signed_at: &str,
 ) -> Attestation {
-    let by = personal_steward_id(sk.verifying_key().as_bytes());
+    build_seal_with(members, sk, description, created_at, issued_at, signed_at)
+        .expect("a local key cannot fail to sign")
+}
+
+/// `build_seal` for any signer, local or agent-held.
+pub fn build_seal_with(
+    members: &[Attestation],
+    signer: &dyn crate::StewardSigner,
+    description: &str,
+    created_at: &str,
+    issued_at: &str,
+    signed_at: &str,
+) -> Result<Attestation, String> {
+    let by = signer.steward_id();
     let member_ids: Vec<String> = members.iter().map(Attestation::id).collect();
     let manifest = seal_manifest(&member_ids, &by, description, created_at);
     let bundle_hash = dsh(CTX_BUNDLE, &cbor::encode(&manifest));
@@ -691,8 +701,8 @@ pub fn build_seal(
         (Value::text("r"), Value::Array(Vec::new())),
     ]);
 
-    let signature = personal_sign(&core, sk, "author", signed_at).to_vec();
-    Attestation {
+    let signature = crate::personal_sign_with(&core, signer, "author", signed_at)?.to_vec();
+    Ok(Attestation {
         core,
         signatures: vec![SignatureObject {
             by,
@@ -702,7 +712,7 @@ pub fn build_seal(
             keyset: None,
             signature,
         }],
-    }
+    })
 }
 
 /// What to assert in a `general-claim/1` attestation. Mirrors the parameters of
@@ -742,6 +752,18 @@ pub fn author_general_claim(
     role: &str,
     signed_at: &str,
 ) -> Attestation {
+    author_general_claim_with(spec, sk, role, signed_at)
+        .expect("a local key cannot fail to sign")
+}
+
+/// `author_general_claim` for any signer, local or agent-held (fallible: the
+/// agent may refuse or be gone).
+pub fn author_general_claim_with(
+    spec: &ClaimSpec,
+    signer: &dyn crate::StewardSigner,
+    role: &str,
+    signed_at: &str,
+) -> Result<Attestation, String> {
     // A2.1: exactly one of body / body_b3. Detached content commits to the
     // plain blake3 of the bytes (no domain separation — it names a file, the
     // same way media blobs are keyed), plus the length.
@@ -801,9 +823,9 @@ pub fn author_general_claim(
         (Value::text("r"), Value::Array(refs)),
     ]);
 
-    let by = personal_steward_id(sk.verifying_key().as_bytes());
-    let signature = personal_sign(&core, sk, role, signed_at).to_vec();
-    Attestation {
+    let by = signer.steward_id();
+    let signature = crate::personal_sign_with(&core, signer, role, signed_at)?.to_vec();
+    Ok(Attestation {
         core,
         signatures: vec![SignatureObject {
             by,
@@ -813,7 +835,7 @@ pub fn author_general_claim(
             keyset: None,
             signature,
         }],
-    }
+    })
 }
 
 /// Assemble a bundle from `members` (+ optional `media`), optionally sealing it
@@ -829,12 +851,36 @@ pub fn make_bundle(
     issued_at: &str,
     signed_at: &str,
 ) -> Bundle {
+    make_bundle_with(
+        members,
+        media,
+        sealer.map(|sk| sk as &dyn crate::StewardSigner),
+        description,
+        created_at,
+        issued_at,
+        signed_at,
+    )
+    .expect("a local key cannot fail to sign")
+}
+
+/// `make_bundle` for any signer, local or agent-held.
+pub fn make_bundle_with(
+    members: Vec<Attestation>,
+    media: HashMap<String, Vec<u8>>,
+    sealer: Option<&dyn crate::StewardSigner>,
+    description: &str,
+    created_at: &str,
+    issued_at: &str,
+    signed_at: &str,
+) -> Result<Bundle, String> {
     let mut attestations = members.clone();
-    if let Some(sk) = sealer {
-        attestations.push(build_seal(&members, sk, description, created_at, issued_at, signed_at));
+    if let Some(signer) = sealer {
+        attestations.push(build_seal_with(
+            &members, signer, description, created_at, issued_at, signed_at,
+        )?);
     }
 
-    let created_by = sealer.map(|sk| personal_steward_id(sk.verifying_key().as_bytes()));
+    let created_by = sealer.map(|s| s.steward_id());
     let manifest = if !description.is_empty() || created_by.is_some() {
         let mut entries = vec![
             (Value::text("created_at"), Value::text(created_at)),
@@ -848,5 +894,5 @@ pub fn make_bundle(
         None
     };
 
-    Bundle { attestations, media, manifest }
+    Ok(Bundle { attestations, media, manifest })
 }

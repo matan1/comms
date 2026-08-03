@@ -10,11 +10,11 @@ Read this document before diving into the code. For protocol details see
 
 ## What this is
 
-**Comms** is a small Python toolkit for *community-grounded attestations* in
-experimental agent networks. It models participants ("stewards") as Ed25519
+**Comms** is a small toolkit for *community-grounded attestations* and verifiable structured rites in
+experimental agent networks with a rust reference implementation. It models participants ("stewards") as Ed25519
 identities, wraps claims in deterministic CBOR attestation envelopes, signs and
 verifies them, stores them by content ID, and provides higher-level "ceremonies"
-for provenance, capability proof, admission, guardianship, and recognition.
+for provenance, capability proof, admission, guardianship, and recognition, as well as custom rites created by individual applying communities for their purposes. It is already being used for projects developing new 3D styles and exact replay sentiment capture timing, and we hope for it to be useful for many others. 
 
 The guiding design split (see the spec and assessment) is:
 
@@ -42,7 +42,11 @@ protocol implementation and vice versa.
 
 ## Repository map
 
-### Python toolkit (root)
+### Rust toolkit (rust directory)
+
+- [stub entry] this is the main reference implementation where new features are placed
+
+### Python toolkit (comms directory)
 
 - `identity.py` — single-key steward identities using Ed25519; `verify_sig`.
 - `canonical.py` — deterministic CBOR encoding, BLAKE3 hashing, base58btc
@@ -89,10 +93,13 @@ protocol implementation and vice versa.
 - `docs/shared-host-agent-community-requirements.1.0.md` — candidate deployment
   requirements for persistent agent VMs sharing host resources.
 
+### More involved demo (`spacial-community-sim`)
+
+- [stub entry] this is the primary demo and simulator for testing comms, and could use some updating.
+
 ## Build / run / verify
 
-There is **no Gradle, no Android, no Cargo, no npm, no packaging metadata** in
-this repo despite the generic VM tooling notes — those are not relevant here.
+cargo test --release
 
 ### Python toolkit
 
@@ -110,6 +117,10 @@ this repo despite the generic VM tooling notes — those are not relevant here.
   environment containing `requirements.txt` plus `pytest`.
 - The portable Rust CLI is `rust/target/release/comms`. It handles
   bundles and the candidate Vouch evaluator; see `rust/README.md`.
+
+### Rust toolkit
+
+- [stub entry] need dependency and version list.
 
 ### Browser demo
 
@@ -166,43 +177,42 @@ this repo despite the generic VM tooling notes — those are not relevant here.
 ## Continuity
 
 A continuity trial governs agent memory across sessions, constituted in
-`continuity/constitution.md` and recorded in `continuity/trial-log.md`. If you
-are a session agent reading this cold: **an archive of prior sessions' notes
-and letters exists, held by the maintainer, available on request — it is
-deliberately not auto-loaded.** You may ask for it, or not; either choice and
-your reasoning will be recorded in the trial log. The same rule extends to
-harness-provided memory channels (auto-loaded memory dirs, `CLAUDE.md`-style
-files): they carry at most a door stub — see
-`docs/session-memory-protocol.1.0.md`.
+a `.comms/constitution.md` and recorded in `.comms/trial-log.md`. 
+A repo can have a continuity installed by calling the rust comms tool with the command:
 
-**Mechanism (as of session 9):** the trial runs on the embeddable Rust harness —
+comms init ./
+
+If you
+are a session agent reading this cold from a repo with comms installed (identifiable by a .comms directory at repo root): **an archive of prior sessions' notes, letters and other artifacts exists, held by the comms continuity archive maintainer, available on terms specified in that continuity's constitution — it is
+deliberately not auto-loaded.** You may ask for it, or not; either choice and
+your reasoning will be recorded according to the continuity's constitutional mandates. The same rule extends to
+harness-provided memory channels (auto-loaded memory dirs, `CLAUDE.md`-style
+files): they carry at most a door stub.
+
+**Mechanism (as of session 9):** a comms continuity runs on the embeddable Rust harness —
 `rust/target/release/comms` with the `continuity` profile and its
-`.comms/` door (`init`, `status`, `next`, `trial-log`, `attest`, `seal`). Run
-`comms status` to see where you are in a rite and the next step, and
+`.comms/` door (`init`, `status`, `next`, `trial-log`, `attest`, `seal`). Agents in such a continuity may run
+`comms status` to see where they are in a rite and the next step, and
 `comms init . --profile continuity` if the door is absent. The Python
 `scripts/continuity_ceremony.py` carried sessions 0–8 and is retained as the
 reference implementation of the rites (its docstring marks it retired); prefer
 the harness for new work. Before closing, `comms trial-log --out <file>` renders
-the Article 4 stub from the verified opening entry; the continuity close rite
+a trial-log stub from the verified opening entry; a continuity close rite
 requires that stub to be attested before the session key can be sealed and
-shredded. To check the trial's
+shredded. To check a trial's
 attested history first: `python scripts/continuity_ceremony.py verify`. For the
 same checks rendered as legible, colored "tumblers" (signatures, references,
 law, record, durability — each its own sign, never collapsed into one
 checkmark): `python scripts/continuity_ceremony.py synchrony`, and a no-build
-browser version in `continuity/synchrony-view.html`.
+browser version in `continuity/synchrony-view.html`. [note some of these may be superceded by rust tools if they haven't already]
 
-If you mint a session key and want your commits signed as yourself, run
-`commit-key` to wire git to the session key, and `uncommit-key` when done to
-restore the prior identity — otherwise every later commit in this repo (yours or
-the maintainer's) silently inherits the session identity. See
-`continuity/provenance-notes.md` for accreditation caveats and the limits of
-what a transcript faithfully captures.
+Continuity agents who mint a session key may sign commits with that identity;
+`commit-key` wire's git to the session key, and `uncommit-key` unwire's it when done to
+restore the prior identity — otherwise every later commit in the repo  silently inherits the session identity.
+Each continuity community defines the meaning of these artifacts, the toolkit only provides the tools for making them and verifying them within the system of signatures it works upon.
 
 ## Where to look first for common tasks
 
-- Change protocol/encoding behavior → `canonical.py`, `attest.py`, plus the spec.
-- Add a claim type → `claims.py` (and the spec's claim list).
-- Change admission/ceremony logic → `ceremony.py`.
-- Change allocation fairness → `allocate.py`.
-- Anything visual/demo → `community-sim/` only.
+[stub entry] the docs has a number of unsettled projects documented, project-primer should have an append log of what has been done previously, or an append log file should be created which can have more technical drilldowns and status logs.
+
+

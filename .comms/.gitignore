@@ -1,3 +1,0 @@
-# Session signing seeds never leave this machine.
-*.key
-session-signing.key*

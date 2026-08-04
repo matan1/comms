@@ -90,6 +90,10 @@ protocol implementation and vice versa.
   interoperability decisions, and the recommended architecture roadmap.
 - `docs/appraising-interpreters-requirements.1.0.md` — candidate requirements
   for retaining, transporting, appraising, and executing interpreters.
+- `docs/log-templates.1.0.md` — candidate design for declared, attestable log
+  templates (Mustache subset), separating a community's vocabulary from the
+  toolkit's derived evidence and retiring the Continuity Trial terms currently
+  compiled into `trial_log.rs`.
 - `docs/shared-host-agent-community-requirements.1.0.md` — candidate deployment
   requirements for persistent agent VMs sharing host resources.
 

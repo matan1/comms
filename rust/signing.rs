@@ -425,8 +425,10 @@ pub fn sign_pending_selected(
 pub enum FinalizeOutcome {
     /// Stored (or merged) into the store under its content id.
     Stored { stem: String, id: String, merged: usize },
-    /// Already present with nothing new to add.
-    AlreadySealed { stem: String, id: String },
+    /// Already present with nothing new to add. Finalization is not an A1.8
+    /// seal — "sealed" is reserved for `comms seal` / the bundle integrity
+    /// seal, and this path must not borrow the word.
+    AlreadyFinalized { stem: String, id: String },
 }
 
 /// Move every fully-signed pending item in `dir` into `store_dir`, verifying
@@ -472,7 +474,7 @@ pub fn finalize_pending_selected(
                     .map_err(|e| format!("{}: {e}", file.display()))?;
                 FinalizeOutcome::Stored { stem: item.stem.clone(), id, merged }
             } else {
-                FinalizeOutcome::AlreadySealed { stem: item.stem.clone(), id }
+                FinalizeOutcome::AlreadyFinalized { stem: item.stem.clone(), id }
             }
         } else {
             std::fs::write(&file, item.attestation.to_cbor())
@@ -556,7 +558,12 @@ fn verify_all_signatures(att: &Attestation) -> Result<(), String> {
 
 /// Add to `existing` only signatures whose signer is not already present —
 /// a new co-signer can join, no one gets silently restamped.
-fn merge_new_signatures(existing: &mut Attestation, incoming: &Attestation) -> usize {
+///
+/// Two copies of one core are the *same attestation* with different witness
+/// sets; coalescing them by id keeps whichever arrived first and drops the
+/// other's signers. Anywhere content-addressed storage meets a second copy —
+/// `finalize` here, archive `intake` — this is how they are reconciled.
+pub fn merge_new_signatures(existing: &mut Attestation, incoming: &Attestation) -> usize {
     let mut have: Vec<String> = existing.signatures.iter().map(|s| s.by.clone()).collect();
     let mut added = 0;
     for s in &incoming.signatures {

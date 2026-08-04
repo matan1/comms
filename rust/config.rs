@@ -216,8 +216,14 @@ pub struct Rite {
 /// Who countersigns staged artifacts (the `[countersign]` table). The `by`
 /// steward id is the counterparty a `countersign` step names in its needs
 /// file; the substrate never signs on their behalf.
+///
+/// A per-target table (`[countersign.<target>]`) overrides the default for
+/// that one artifact, so a community can have its constitution witnessed by a
+/// different party than its session keys.
 #[derive(Debug, Clone)]
 pub struct CountersignCfg {
+    /// The step target this table governs; `None` for the default table.
+    pub target: Option<String>,
     pub by: String,
     pub role: String,
     pub community: Option<String>,
@@ -244,7 +250,10 @@ pub struct HarnessConfig {
     pub session_key: String,
     pub rites: Vec<Rite>,
     pub artifact_types: Vec<ArtifactType>,
+    /// The default `[countersign]` party.
     pub countersign: Option<CountersignCfg>,
+    /// Per-target overrides from `[countersign.<target>]` tables.
+    pub countersign_targets: Vec<CountersignCfg>,
 }
 
 impl HarnessConfig {
@@ -314,25 +323,35 @@ impl HarnessConfig {
             })
             .collect();
 
-        let countersign = toml
-            .get("countersign", "by")
-            .and_then(TomlValue::as_str)
-            .map(|by| CountersignCfg {
-                by: by.to_owned(),
-                role: toml
-                    .get("countersign", "role")
-                    .and_then(TomlValue::as_str)
-                    .unwrap_or("guardian")
-                    .to_owned(),
-                community: toml
-                    .get("countersign", "community")
-                    .and_then(TomlValue::as_str)
-                    .map(str::to_owned),
-                context: toml
-                    .get("countersign", "context")
-                    .and_then(TomlValue::as_str)
-                    .map(str::to_owned),
-            });
+        let read_countersign = |table: &str, target: Option<&str>| {
+            toml.get(table, "by")
+                .and_then(TomlValue::as_str)
+                .map(|by| CountersignCfg {
+                    target: target.map(str::to_owned),
+                    by: by.to_owned(),
+                    role: toml
+                        .get(table, "role")
+                        .and_then(TomlValue::as_str)
+                        .unwrap_or("guardian")
+                        .to_owned(),
+                    community: toml
+                        .get(table, "community")
+                        .and_then(TomlValue::as_str)
+                        .map(str::to_owned),
+                    context: toml
+                        .get(table, "context")
+                        .and_then(TomlValue::as_str)
+                        .map(str::to_owned),
+                })
+        };
+        let countersign = read_countersign("countersign", None);
+        let countersign_targets = toml
+            .children_of("countersign")
+            .into_iter()
+            .filter_map(|name| {
+                read_countersign(&format!("countersign.{name}"), Some(&name))
+            })
+            .collect();
 
         HarnessConfig {
             profile,
@@ -343,7 +362,17 @@ impl HarnessConfig {
             rites,
             artifact_types,
             countersign,
+            countersign_targets,
         }
+    }
+
+    /// The party who countersigns `target`: its own `[countersign.<target>]`
+    /// table if declared, else the default `[countersign]`.
+    pub fn countersign_for(&self, target: &str) -> Option<&CountersignCfg> {
+        self.countersign_targets
+            .iter()
+            .find(|c| c.target.as_deref() == Some(target))
+            .or(self.countersign.as_ref())
     }
 
     pub fn rite(&self, name: &str) -> Option<&Rite> {

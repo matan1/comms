@@ -10,7 +10,7 @@ use std::io::Read;
 use std::process;
 
 use comms_core::bundle::{
-    author_general_claim, build_seal, content_report, inspect_bundle, make_bundle, media_key,
+    build_seal, content_report, inspect_bundle, make_bundle, media_key,
     parse_attestation, parse_bundle, verify_seal, BodyStatus, Bundle, ClaimSpec, ContentReport,
     InspectReport,
 };
@@ -133,24 +133,24 @@ fn help_for(cmd: &str) -> String {
         "init" => "comms init [dir] [--profile default|continuity] [--dry-run] [--force]\n  Install or refresh the .comms/ harness door in a repo.\n",
         "attest" => "comms attest --key <k.json> --about S --kind S --body <file|-> [--detach] \\\n    [--media-type T] [--language L] [--community C] [--occasion O] [--role R] \\\n    [--support ID]... [--out FILE]\n  Author and sign a general-claim/1 from a content file (-> <id>.cbor).\n  --detach (A2): the claim commits to {body_b3, body_len} and the body bytes\n  stay out of the attestation — pair them back up in a bundle via pack --media.\n",
         "inspect" => "comms inspect <bundle> [--json]\n  Verify every member on its own terms (signatures, refs, media), and report\n  body status (verified | absent | mismatched) for detached bodies (A2.2).\n",
-        "status" => "comms status [dir] [--json]\n  Report where you are in each rite and the exact next command.\n",
+        "status" => "comms status [dir] [--json]\n  Report the door's session succession, where the live session stands in each\n  rite, and the exact next command. A closed session's completed rites are\n  history: reported, never re-offered as work. Also reports whether the active\n  comms.toml still matches its attested copy.\n",
         "next" => "comms next [dir] [--rite N] [--body F] [--about S] [--kind K]\n  Perform the next pending step of a rite. attest steps need --body;\n  with no --rite, advances the rite you are currently in.\n",
         "verify" => "comms verify <bundle>\n  Check the A1.8 integrity seal (also the default for a bare bundle path).\n",
         "seal" => "comms seal <bundle> --key <k.json> [--out P] [--description S] [--created-at T] [--issued-at T] [--signed-at T]\n  Add an A1.8 integrity seal (signs the exact member set).\n",
         "pack" => "comms pack --out <bundle> [<att.cbor|dir>...] [--media F]... [--seal --key <k.json>] [--description S]\n  Gather attestations and/or media blobs into a bundle.\n",
         "extract" => "comms extract <bundle> --out <dir>\n  Write each member <id>.cbor and media blob to disk.\n",
         "deliver" => "comms deliver <attestation-id|body-b3-hex> [repo-root] [--request ID]\n  Host/archive-side transport after a grant: resolve a detached body from the\n  configured archive, copy it to the grants/<request-id>/ delivery path, and\n  print the exact path and hash. If --request is omitted, uses this session's\n  recorded archive request from the continuity rite.\n",
-        "intake" => "comms intake <bundle|file|dir> [archive-root] --key <custodian key> \\\n    [--legacy --provenance \"...\"]\n  Host/archive-side crossing: verify a sealed session bundle, ingest members by\n  id and bodies by hash (idempotent), regenerate undurable views/ for browsing,\n  and attest custody. --legacy takes unattested material in as testimony, by\n  hash, honestly labeled.\n",
+        "intake" => "comms intake <bundle|file|dir> [archive-root] --key <custodian key> \\\n    [--legacy --provenance \"...\"]\n  Host/archive-side crossing: verify a sealed session bundle, ingest members by\n  id and bodies by hash (idempotent), regenerate undurable views/ for browsing,\n  and attest custody. A member already in custody is not coalesced away: an\n  arriving copy of the same core merges in any signer custody had not seen.\n  --legacy takes unattested material in as testimony, by hash, honestly labeled.\n",
         "audit" => "comms audit [archive-root]\n  Host/archive-side custody check: walk store/ and bodies/, re-derive every id\n  and hash, and report intact / absent / mismatched. Drift is marked, never\n  deleted. On drift, audit should propose a reviewed custody attestation draft.\n",
         "catalog" => "comms catalog <path> [--json]\n  Read-only inventory of any archive-shaped or legacy directory. Hashes and\n  classifies regular files, counts text lines by top-level category, and\n  reports exact duplicate groups. Follows no symlinks and writes nothing.\n",
-        "manifest" => "comms manifest <path> [--level minimal|full] [--out P]\n  Generate a deterministic archive view. Minimal discloses only aggregate\n  structure and health; full adds artifact metadata, relationships, duplicates,\n  and gaps. Generation is automatic-capable, but inspection remains chosen.\n",
-        "trial-log" => "comms trial-log [repo-root] [--session N] [--out P] [--force]\n  Render a Continuity Trial log stub from a verified, session-signed opening\n  entry. Auto-fills evidence IDs and leaves History's observations as [History].\n  Output is stdout unless --out is given; existing files require --force.\n",
-        "pending" => "comms pending list [DIR]... [--json]\ncomms pending inspect <stem|id> [DIR]... [--json]\ncomms pending state <stem|id> --state S [--pending DIR]\ncomms pending clarify <stem|id> --body F --key K [--pending DIR] [--store DIR]\n  Discover and appraise proposed signing acts without conflating inboxes.\n  Clarification creates a signed question and leaves the pending core unchanged.\n",
+        "manifest" => "comms manifest <path> [--level minimal|full] [--out P]\n  Generate a deterministic archive view. Minimal discloses aggregate structure\n  and health, plus the kind and about of the views class — and nothing else\n  about it: no paths, ids, hashes, or sizes. Full adds artifact metadata,\n  relationships, duplicates, and gaps. Generation is automatic-capable, but\n  inspection remains chosen.\n",
+        "trial-log" => "comms trial-log [repo-root] [--session N] [--steward ID] [--out P] [--force]\n  Render a Continuity Trial log stub from a verified, session-signed opening\n  entry. Selects by --session (that session's own numbering) or --steward, and\n  otherwise by the session you hold. Auto-fills evidence IDs and leaves\n  History's observations as [History].\n  Output is stdout unless --out is given; existing files require --force.\n",
+        "pending" => "comms pending list [--pending DIR]... [DIR]... [--json]\ncomms pending inspect <stem|id> [--pending DIR]... [DIR]... [--json]\ncomms pending state <stem|id> --state S [--pending DIR]\ncomms pending clarify <stem|id> --body F --key K [--pending DIR] [--store DIR]\n  Discover and appraise proposed signing acts without conflating inboxes.\n  Every action spells the inbox the same way (--pending); list and inspect also\n  take bare directories so several inboxes can be named at once. An option a\n  subcommand would ignore is refused, not silently dropped.\n  Clarification creates a signed question and leaves the pending core unchanged.\n",
         "mint" => "comms mint --out <key.json> [--label L]\n  Generate a steward key ({seed_b58, label} JSON, mode 0600).\n",
         "agent" => "comms agent serve|list [--socket PATH]\n  serve: run the built-in key agent (ssh-agent protocol; seeds live only in\n  its memory — its death is a shred). list: show held identities.\n  Socket resolution: --socket, $COMMS_AGENT_SOCK, $SSH_AUTH_SOCK,\n  .comms/agent.sock. With session_key = \"ssh-agent\" in comms.toml, mint\n  hands the session seed to this agent and no key file ever exists.\n",
         "waive" => "comms waive <type> [dir] --body <reason file|->\n  Record a session-signed waiver: this session cannot produce a declared\n  `required_for` artifact, and says so on the record instead of being blocked.\n  Only rites with `allow_waivers = true` accept it at seal.\n",
         "sign" => "comms sign --key <path> [--pending DIR] [--item STEM|ID]...\n  Countersign staged pending items (<name>.cbor + <name>.needs.json) with an\n  OpenSSH ed25519 key or a steward key file. --item creates a bounded signing\n  plan; omitted, every item in the explicitly resolved inbox is considered.\n",
-        "finalize" => "comms finalize [--pending DIR] [--store DIR] [--item STEM|ID]...\n  Verify and move every or only explicitly selected fully-signed item into the\n  store. Selected finalization is atomic and unrelated inbox items cannot block\n  or be swept into it.\n",
+        "finalize" => "comms finalize [--pending DIR] [--store DIR] [--item STEM|ID]...\n  Verify and move every or only explicitly selected fully-signed item into the\n  store. Selected finalization is atomic and unrelated inbox items cannot block\n  or be swept into it. Finalizing is not sealing: the A1.8 integrity seal is\n  `comms seal` over a packed bundle.\n",
         "vouch" => "comms vouch <bundle> --policy ID --subject ID --purpose S --as-of T [--json] [--community ID] [--receipt-out P --key K]\n  Policy-relative evaluation: a viewer's judgment, not proof.\n",
         _ => return usage_text(),
     };
@@ -173,7 +173,8 @@ fn read_bundle(path: &str) -> Bundle {
 }
 
 /// Tiny option parser. `--flag value` for value options, repeated for the
-/// multi option `--media`, bare for the boolean flags `--seal` / `--json`.
+/// multi options `--media` / `--support` / `--item` / `--pending`, bare for the
+/// boolean flags `--seal` / `--json`.
 #[derive(Default)]
 struct Opts {
     positionals: Vec<String>,
@@ -181,7 +182,11 @@ struct Opts {
     media: Vec<String>,
     support: Vec<String>,
     items: Vec<String>,
+    pending: Vec<String>,
     flags: HashSet<String>,
+    /// Every option name seen, in order, so a command can refuse the ones it
+    /// would silently ignore.
+    seen: Vec<String>,
 }
 
 fn parse_opts(args: &[String]) -> Opts {
@@ -192,6 +197,7 @@ fn parse_opts(args: &[String]) -> Opts {
     while i < args.len() {
         let a = &args[i];
         if a.starts_with("--") {
+            o.seen.push(a.clone());
             if BOOLS.contains(&a.as_str()) {
                 o.flags.insert(a.clone());
             } else {
@@ -204,6 +210,7 @@ fn parse_opts(args: &[String]) -> Opts {
                     "--media" => o.media.push(val),
                     "--support" => o.support.push(val),
                     "--item" => o.items.push(val),
+                    "--pending" => o.pending.push(val),
                     _ => {
                         o.values.insert(a.clone(), val);
                     }
@@ -226,6 +233,45 @@ impl Opts {
     }
     fn has(&self, flag: &str) -> bool {
         self.flags.contains(flag)
+    }
+
+    /// Refuse any option this command would not act on. An accepted-but-ignored
+    /// flag reads as an instruction that was honoured; it was not. `--help` is
+    /// handled before dispatch and is always allowed.
+    fn accept(self, what: &str, allowed: &[&str]) -> Self {
+        let mut bad: Vec<&str> = self
+            .seen
+            .iter()
+            .map(String::as_str)
+            .filter(|a| *a != "-h" && *a != "--help" && !allowed.contains(a))
+            .collect();
+        bad.sort_unstable();
+        bad.dedup();
+        if !bad.is_empty() {
+            let accepts = if allowed.is_empty() {
+                "(no options)".to_owned()
+            } else {
+                allowed.join(", ")
+            };
+            die(format!(
+                "{what} does not take {} — it would be ignored, not honoured.\n  accepts: {accepts}",
+                bad.join(", "),
+            ));
+        }
+        self
+    }
+
+    /// The single inbox an option-driven command acts on, if one was named.
+    /// Repeating `--pending` is refused rather than silently taking the last.
+    fn one_pending(&self) -> Option<&str> {
+        match self.pending.as_slice() {
+            [] => None,
+            [one] => Some(one.as_str()),
+            many => die(format!(
+                "--pending given {} times; this command acts on one inbox",
+                many.len()
+            )),
+        }
     }
 }
 
@@ -260,7 +306,7 @@ fn timestamps(o: &Opts) -> (String, String, String) {
 // ---- init ------------------------------------------------------------------
 
 fn cmd_init(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("init", &["--profile", "--dry-run", "--force"]);
     let target = o.positionals.first().map(String::as_str).unwrap_or(".");
     let profile_name = o.get("--profile").unwrap_or("default");
     let profile = profile_by_name(profile_name).unwrap_or_else(|| {
@@ -303,7 +349,7 @@ fn cmd_init(args: &[String]) {
 // ---- attest ----------------------------------------------------------------
 
 fn cmd_attest(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("attest", &["--key", "--about", "--kind", "--role", "--media-type", "--language", "--body", "--detach", "--support", "--community", "--occasion", "--out", "--issued-at", "--signed-at"]);
     // `--key session` signs as the live session however the harness holds its
     // seed (file, agent, or ephemeral) — required in ssh-agent mode, where no
     // key file exists to point at.
@@ -409,20 +455,81 @@ fn step_hint(step: &comms_core::config::Step) -> &'static str {
     }
 }
 
-fn blocked_by(comms_dir: &std::path::Path, cfg: &HarnessConfig, rite: &comms_core::config::Rite) -> Vec<String> {
+/// Prerequisite rites still incomplete *within one session generation*. A
+/// requirement is satisfied by the session that is performing the rite, not by
+/// whoever happens to hold a key now — which is why this takes an epoch.
+fn blocked_by_in(
+    comms_dir: &std::path::Path,
+    cfg: &HarnessConfig,
+    rite: &comms_core::config::Rite,
+    epoch: Option<&rites::Epoch>,
+) -> Vec<String> {
     rite.requires
         .iter()
         .filter(|name| {
             cfg.rite(name)
-                .map(|required| !rites::rite_view(comms_dir, required).complete())
+                .map(|required| !rites::rite_view_in(comms_dir, required, epoch).complete())
                 .unwrap_or(true)
         })
         .cloned()
         .collect()
 }
 
+/// One line summarising every rite for a closed session: what it completed and
+/// what it never began. History, rendered without re-offering it as work.
+fn session_summary(
+    comms_dir: &std::path::Path,
+    cfg: &HarnessConfig,
+    epoch: &rites::Epoch,
+) -> String {
+    cfg.rites
+        .iter()
+        .map(|r| {
+            let v = rites::rite_view_in(comms_dir, r, Some(epoch));
+            let state = if v.concluded() {
+                "✓ concluded"
+            } else if v.complete() {
+                "✓ complete"
+            } else if v.untouched() {
+                "· not begun"
+            } else {
+                "! unfinished"
+            };
+            format!("{} {state}", r.name)
+        })
+        .collect::<Vec<_>>()
+        .join("   ")
+}
+
+/// How a rite reads as a whole. "Concluded" rather than "complete" when it
+/// reached its end only because a step nobody can check was set aside — a
+/// distinction the door owes its reader.
+fn rite_state(v: &rites::RiteView) -> &'static str {
+    if v.concluded() {
+        "concluded"
+    } else if v.complete() {
+        "complete"
+    } else {
+        "in progress"
+    }
+}
+
+/// One step line: glyph, step, and — for the one step that can never be
+/// checked from here — why it carries no mark.
+fn render_step(sv: &rites::StepView, is_next: bool) -> String {
+    match sv.status {
+        rites::StepStatus::Done => format!("✓ {}", sv.step.display()),
+        rites::StepStatus::Unverifiable => format!(
+            "? {}  (unverifiable: only its holder could witness this)",
+            sv.step.display()
+        ),
+        rites::StepStatus::Pending if is_next => format!("→ {}", sv.step.display()),
+        rites::StepStatus::Pending => format!("· {}", sv.step.display()),
+    }
+}
+
 fn cmd_status(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("status", &["--json"]);
     let comms_dir = resolve_comms_dir(o.positionals.first().map(String::as_str));
     let cfg = config::load(&comms_dir).unwrap_or_else(|e| die(e));
     let active = rites::active_rite(&comms_dir, &cfg);
@@ -441,29 +548,146 @@ fn cmd_status(args: &[String]) {
     if cfg.rites.is_empty() {
         println!("  (no rites declared in comms.toml)");
     }
-    for r in &cfg.rites {
-        let v = rites::rite_view(&comms_dir, r);
-        let here = active.map(|a| a.name == r.name).unwrap_or(false);
+
+    // The succession this door holds evidence of. A session's completed rites
+    // are history: they are reported, never re-offered as work, and the death
+    // of its key does not un-complete them.
+    let history = rites::epochs(&comms_dir, &cfg);
+    let live = history.iter().find(|e| e.mine());
+    let mine_ordinal = history.iter().position(rites::Epoch::mine).map(|i| i + 1);
+    if !history.is_empty() {
+        println!("\n  sessions on record ({}):", history.len());
+        for (n, e) in history.iter().enumerate() {
+            println!("    {}  {}  [{}]", n + 1, e.name(), e.state.as_str());
+            if !e.mine() {
+                println!("        {}", session_summary(&comms_dir, &cfg, e));
+            }
+        }
+        if history.iter().any(|e| e.state == rites::SessionState::Open) {
+            println!(
+                "    (open = minted, not concluded. A peer working now and a session that\n     \
+                 died without finishing look the same from here.)"
+            );
+        }
+        if history.iter().any(|e| e.state == rites::SessionState::Concluded) {
+            println!(
+                "    (concluded = its closing rite reached its end. Whether the seed was\n     \
+                 destroyed is not knowable from here — only its holder could witness that.)"
+            );
+        }
+    }
+
+    // Expand one session's rites: yours if you hold one, else the most recent
+    // on record — the cold-reader case, and the only place a step nobody can
+    // check becomes visible.
+    if let Some(e) = live.or_else(|| history.last()) {
+        match (e.mine(), mine_ordinal) {
+            (true, Some(n)) => println!("\n  session {n} is yours — its rites:"),
+            _ => println!(
+                "\n  session {} ({}) — its rites, as it left them:",
+                history.len(),
+                e.state.as_str()
+            ),
+        }
+        for r in &cfg.rites {
+            let v = rites::rite_view_in(&comms_dir, r, Some(e));
+            // `*` and `→` say "you, here, next". Neither is true of a session
+            // you do not hold: its pending steps are nobody's to perform.
+            let here = e.mine() && active.map(|a| a.name == r.name).unwrap_or(false);
+            println!(
+                "\n    rite {}{}  [{}]",
+                r.name,
+                if here { " *" } else { "" },
+                rite_state(&v)
+            );
+            let blockers = blocked_by_in(&comms_dir, &cfg, r, Some(e));
+            if !blockers.is_empty() {
+                println!("      ! blocked by incomplete rite(s): {}", blockers.join(", "));
+            }
+            for (i, sv) in v.steps.iter().enumerate() {
+                println!("      {}", render_step(sv, e.mine() && Some(i) == v.next));
+            }
+        }
+    }
+
+    if live.is_none() {
+        println!("\n  you hold no session here: nothing signs as you until you mint one.");
+        let open = history
+            .iter()
+            .filter(|e| e.state == rites::SessionState::Open)
+            .count();
+        if open > 0 {
+            println!(
+                "  {open} session(s) here are open — someone else's live work, or a session"
+            );
+            println!("  that ended without finishing. Not yours either way; leave them be.");
+        }
+        // Name what is partway, without claiming to know why. A rite left
+        // half-done is either still being done or was abandoned, and from
+        // outside those look the same — but which rites are open is a fact
+        // worth stating either way.
+        for (n, e) in history.iter().enumerate() {
+            let unfinished: Vec<&str> = cfg
+                .rites
+                .iter()
+                .filter(|r| {
+                    let v = rites::rite_view_in(&comms_dir, r, Some(e));
+                    !v.complete() && !v.untouched()
+                })
+                .map(|r| r.name.as_str())
+                .collect();
+            if unfinished.is_empty() {
+                continue;
+            }
+            match e.state {
+                rites::SessionState::Concluded => println!(
+                    "  session {} concluded with {} unfinished. The gap is part of the record.",
+                    n + 1,
+                    unfinished.join(", ")
+                ),
+                _ => println!(
+                    "  session {} is partway through {} — still working, or stopped there.",
+                    n + 1,
+                    unfinished.join(", ")
+                ),
+            }
+        }
         println!(
-            "\n  rite {}{}  [{}]",
-            r.name,
-            if here { " *" } else { "" },
-            if v.complete() { "complete" } else { "in progress" }
+            "  opening a session mints a new identity alongside the {} on record;",
+            history.len()
         );
-        let blockers = blocked_by(&comms_dir, &cfg, r);
-        if !blockers.is_empty() {
-            println!("    ! blocked by incomplete rite(s): {}", blockers.join(", "));
+        println!("  none of them is reopened.");
+    }
+
+    // The rules in force vs. the rules on the record. A config is meant to
+    // change; a config that changed without anyone noticing is the problem.
+    // A door that never declared an `attest config` step is not nagged about
+    // one; drift is still reported the moment a config has been attested.
+    let wants_config = cfg
+        .rites
+        .iter()
+        .flat_map(|r| r.steps.iter())
+        .any(|s| s.verb == "attest" && s.target.as_deref() == Some("config"));
+    match rites::config_state(&comms_dir) {
+        Ok(rites::ConfigState::Unattested { active_b3 }) if wants_config => {
+            println!("\n  comms.toml: not attested (blake3 {})", &active_b3[..16]);
+            println!("  this door declares `attest config` — run it while the session key lives.");
         }
-        for (i, sv) in v.steps.iter().enumerate() {
-            let glyph = if sv.done {
-                "✓"
-            } else if Some(i) == v.next {
-                "→"
-            } else {
-                "·"
-            };
-            println!("    {glyph} {}", sv.step.display());
+        Ok(rites::ConfigState::Unattested { .. }) => {}
+        Ok(rites::ConfigState::Matches { id, .. }) => {
+            println!("\n  comms.toml: attested and unchanged ({id})");
         }
+        Ok(rites::ConfigState::Drifted { id, active_b3, attested_b3 }) => {
+            println!("\n  comms.toml: DRIFTED from the attested copy {id}");
+            println!(
+                "    attested blake3 {}  ·  active blake3 {}",
+                &attested_b3[..16],
+                &active_b3[..16]
+            );
+            println!("    the rules in force are not the rules on the record — attest the");
+            println!("    change (or restore the attested bytes) so the difference is accounted.");
+        }
+        Err(_) => {}
     }
 
     // A session key on disk is a liability the door should not be quiet
@@ -487,27 +711,21 @@ fn cmd_status(args: &[String]) {
     if let Ok(cfg) = comms_core::config::load(&comms_dir) {
         if cfg.session_key == "ssh-agent" {
             let sock = comms_core::sshagent::socket_path(&comms_dir);
-            let sid = std::fs::read_to_string(comms_dir.join("session.id"))
-                .map(|s| s.trim().to_owned())
-                .unwrap_or_default();
-            let held = sid
-                .strip_prefix("comms.steward:z")
-                .and_then(|z| bs58::decode(z).into_vec().ok())
-                .and_then(|v| <[u8; 32]>::try_from(v.as_slice()).ok())
-                .map(|pk| comms_core::sshagent::holds(&sock, &pk))
-                .unwrap_or(false);
-            if held {
-                println!(
-                    "\n  session seed held by the agent at {} — never on disk;",
-                    sock.display()
-                );
-                println!("  shred removes it from the agent at close.");
-            } else if !sid.is_empty() {
-                println!(
-                    "\n  ssh-agent mode: no agent at {} holds the recorded session key —",
-                    sock.display()
-                );
-                println!("  the session is closed, or its agent is gone (a dead agent is a shred).");
+            match live {
+                Some(e) => {
+                    println!(
+                        "\n  your session seed is held by the agent at {} — never on disk;",
+                        sock.display()
+                    );
+                    println!("  shred removes it from the agent at close. ({})", e.name());
+                }
+                None => {
+                    println!(
+                        "\n  ssh-agent mode: the agent at {} holds no comms session key.",
+                        sock.display()
+                    );
+                    println!("  Point COMMS_AGENT_SOCK at your own agent, or mint a session.");
+                }
             }
         }
     }
@@ -529,13 +747,20 @@ fn cmd_status(args: &[String]) {
         }
     }
 
-    match active.map(|r| (r, rites::rite_view(&comms_dir, r))) {
+    // Whose act the next step would be: the live session's, or the one that
+    // opening a new session would create. Naming it is the whole point — a
+    // bare "next: mint session" is what read as "the founding never happened."
+    let whose = match mine_ordinal {
+        Some(n) => format!(" (session {n}, yours)"),
+        None => " (opens a new session)".to_owned(),
+    };
+    match active.map(|r| (r, rites::rite_view_in(&comms_dir, r, live))) {
         Some((r, v)) => {
             if let Some(i) = v.next {
                 let step = &r.steps[i];
-                let blockers = blocked_by(&comms_dir, &cfg, r);
+                let blockers = blocked_by_in(&comms_dir, &cfg, r, live);
                 if blockers.is_empty() {
-                    println!("\nnext: {} → {}", r.name, step.display());
+                    println!("\nnext: {} → {}{whose}", r.name, step.display());
                     println!("  run: comms next --rite {}{}", r.name, step_hint(step));
                 } else {
                     println!("\nblocked: {} requires completed rite(s): {}", r.name, blockers.join(", "));
@@ -551,32 +776,59 @@ fn status_json(
     cfg: &HarnessConfig,
     active: Option<&comms_core::config::Rite>,
 ) -> String {
-    let rites_json: Vec<_> = cfg
-        .rites
+    let history = rites::epochs(comms_dir, cfg);
+    let live = history.iter().find(|e| e.mine());
+
+    let rites_for = |epoch: Option<&rites::Epoch>| -> Vec<serde_json::Value> {
+        cfg.rites
+            .iter()
+            .map(|r| {
+                let v = rites::rite_view_in(comms_dir, r, epoch);
+                let blockers = blocked_by_in(comms_dir, cfg, r, epoch);
+                serde_json::json!({
+                    "name": r.name,
+                    "complete": v.complete(),
+                    "untouched": v.untouched(),
+                    "requires": r.requires,
+                    "blocked_by": blockers,
+                    "concluded": v.concluded(),
+                    "steps": v.steps.iter().enumerate().map(|(i, s)| serde_json::json!({
+                        "step": s.step.display(),
+                        "verb": s.step.verb,
+                        // `done` is positive completion only. A step that
+                        // cannot be checked is not done; see `status`.
+                        "done": s.done(),
+                        "status": s.status.as_str(),
+                        "next": Some(i) == v.next,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect()
+    };
+
+    // Every session generation, with its rites as that session left them.
+    // `complete` here is historical completion; `live` is present signing
+    // capability. They are separate fields because they are separate facts.
+    let sessions: Vec<_> = history
         .iter()
-        .map(|r| {
-            let v = rites::rite_view(comms_dir, r);
-            let blockers = blocked_by(comms_dir, cfg, r);
+        .enumerate()
+        .map(|(n, e)| {
             serde_json::json!({
-                "name": r.name,
-                "complete": v.complete(),
-                "requires": r.requires,
-                "blocked_by": blockers,
-                "steps": v.steps.iter().enumerate().map(|(i, s)| serde_json::json!({
-                    "step": s.step.display(),
-                    "verb": s.step.verb,
-                    "done": s.done,
-                    "next": Some(i) == v.next,
-                })).collect::<Vec<_>>(),
+                "ordinal": n + 1,
+                "steward": e.id,
+                "tag": e.tag,
+                "state": e.state.as_str(),
+                "mine": e.mine(),
+                "rites": rites_for(Some(e)),
             })
         })
         .collect();
 
     let next = active.and_then(|r| {
-        let v = rites::rite_view(comms_dir, r);
+        let v = rites::rite_view_in(comms_dir, r, live);
         v.next.map(|i| {
             let step = &r.steps[i];
-            let blockers = blocked_by(comms_dir, cfg, r);
+            let blockers = blocked_by_in(comms_dir, cfg, r, live);
             let command = if blockers.is_empty() {
                 Some(format!("comms next --rite {}{}", r.name, step_hint(step)))
             } else {
@@ -587,22 +839,69 @@ fn status_json(
                 "step": step.display(),
                 "blocked_by": blockers,
                 "command": command,
+                "opens_new_session": live.is_none(),
             })
         })
     });
+
+    let config = match rites::config_state(comms_dir) {
+        Ok(rites::ConfigState::Unattested { active_b3 }) => serde_json::json!({
+            "attested": false, "drifted": false, "active_b3": active_b3,
+        }),
+        Ok(rites::ConfigState::Matches { id, active_b3 }) => serde_json::json!({
+            "attested": true, "drifted": false, "attestation": id, "active_b3": active_b3,
+        }),
+        Ok(rites::ConfigState::Drifted { id, active_b3, attested_b3 }) => serde_json::json!({
+            "attested": true, "drifted": true, "attestation": id,
+            "active_b3": active_b3, "attested_b3": attested_b3,
+        }),
+        Err(e) => serde_json::json!({ "error": e }),
+    };
 
     let out = serde_json::json!({
         "profile": cfg.profile,
         "archive_mode": cfg.archive_mode,
         "active_rite": active.map(|r| r.name.clone()),
-        "rites": rites_json,
+        "config": config,
+        "sessions": sessions,
+        "sessions_on_record": history.len(),
+        "my_session": live.map(|e| e.name()),
+        "open_sessions": history.iter()
+            .filter(|e| e.state == rites::SessionState::Open)
+            .map(|e| e.name()).collect::<Vec<_>>(),
+        // The rites of the live session; absent capability leaves them pending
+        // because no one can act, never because the past was undone.
+        "rites": rites_for(live),
         "next": next,
     });
     format!("{}\n", serde_json::to_string_pretty(&out).unwrap())
 }
 
+/// One machine-readable line naming what an act produced.
+///
+/// Rite steps are acts on the record, and the record of an act should not have
+/// to be recovered from a sentence. Every significant step prints exactly one
+/// of these alongside its prose: a fixed `comms-step` prefix followed by a JSON
+/// object, so it is greppable, `jq`-able, and unambiguous about paths and
+/// values containing spaces.
+///
+///     comms-step {"act":"attest","id":"comms.attest:z…","body_b3":"…"}
+///
+/// Fields are added over time; consumers should read by key and ignore the
+/// rest. `result` and `act` are always present.
+fn print_step_line(facts: &[(String, String)]) {
+    let obj: serde_json::Map<String, serde_json::Value> = facts
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    println!(
+        "comms-step {}",
+        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap()
+    );
+}
+
 fn cmd_next(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("next", &["--rite", "--body", "--about", "--kind", "--media-type", "--label", "--key", "--decision", "--deliver", "--json"]);
     let comms_dir = resolve_comms_dir(o.positionals.first().map(String::as_str));
     let cfg = config::load(&comms_dir).unwrap_or_else(|e| die(e));
 
@@ -614,14 +913,14 @@ fn cmd_next(args: &[String]) {
             .unwrap_or_else(|| die("no rite in progress; nothing to do")),
     };
 
-    let view = rites::rite_view(&comms_dir, rite);
+    let view = rites::rite_view(&comms_dir, &cfg, rite);
     let Some(i) = view.next else {
-        let session = rites::session_id(&comms_dir, rite)
-            .unwrap_or_else(|| "no session on record".to_owned());
+        let session = rites::actor_session(&comms_dir, rite)
+            .unwrap_or_else(|| "the session you hold".to_owned());
         die(format!(
-            "rite '{}' is already complete for session {session} — if that is \
-             not the session you meant to act on, this checkout is stale: pull \
-             the session's branch and check .comms/session.id",
+            "rite '{}' is already complete for {session} — if that is not the session \
+             you meant to act on, you are holding a different seed than you think \
+             (check COMMS_SESSION_SEED / COMMS_AGENT_SOCK)",
             rite.name
         ));
     };
@@ -639,8 +938,77 @@ fn cmd_next(args: &[String]) {
         deliver: o.get("--deliver"),
     };
 
+    // Which session is acting, by tag. Captured before the step because
+    // `shred` ends it: asking afterwards what comes next for "the live
+    // session" would read a closed rite back as untouched and report its first
+    // step as pending. Only the tag is kept — the session's *state* must be
+    // re-read after the act, since the act is often what changed it.
+    let actor_tag = rites::my_epoch(&comms_dir, &cfg).map(|e| e.tag);
+
     match rites::execute_step(&comms_dir, rite, step, &inputs) {
         Ok(outcome) => {
+            // What the step produced, as facts, before any prose: rite and
+            // step first so the line reads in the order the act happened, then
+            // the verb's own facts, then where the rite stands afterwards.
+            let mut line: Vec<(String, String)> = vec![
+                ("act".into(), step.verb.clone()),
+                ("rite".into(), rite.name.clone()),
+                ("target".into(), step.target.clone().unwrap_or_default()),
+            ];
+            line.retain(|(_, v)| !v.is_empty());
+            line.extend(outcome.facts.iter().cloned());
+
+            // Re-read the acting session as it now stands. `mint` is the one
+            // verb with no session before it, so it adopts the one it created.
+            let now = rites::epochs(&comms_dir, &cfg);
+            let actor = match &actor_tag {
+                Some(tag) => now.iter().find(|e| &e.tag == tag).cloned(),
+                None => now.iter().find(|e| e.mine()).cloned(),
+            };
+            let after = rites::rite_view_in(&comms_dir, rite, actor.as_ref());
+            let still_live = actor.as_ref().map(rites::Epoch::mine).unwrap_or(false);
+            // A session the harness cannot sign as is not necessarily closed.
+            // An ephemeral mint has just handed the seed to the holder and not
+            // seen it since: the session exists and is unreachable *here*
+            // until they export it. Calling that "closed" would contradict the
+            // `seed_held_by=holder` fact on the same line. In file and agent
+            // mode a mint is always live, so this state is ephemeral-only.
+            let session_after = if still_live {
+                "live"
+            } else if step.verb == "mint" {
+                "awaiting-seed"
+            } else {
+                "closed"
+            };
+            line.push(("session_after".into(), session_after.to_owned()));
+            line.push((
+                "next".into(),
+                match after.next {
+                    Some(j) => rite.steps[j].display(),
+                    None => "rite-complete".to_owned(),
+                },
+            ));
+
+            if o.has("--json") {
+                let obj: serde_json::Map<String, serde_json::Value> = line
+                    .into_iter()
+                    .map(|(k, v)| (k, serde_json::Value::String(v)))
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::Value::Object(obj)).unwrap()
+                );
+                // The seed is never part of a machine-readable record: it would
+                // land in a log the moment anyone redirected this output.
+                if outcome.secret.is_some() {
+                    eprintln!(
+                        "session seed withheld from --json output — re-run without --json \
+                         to be shown it once, or read it from the mint step's prose"
+                    );
+                }
+                return;
+            }
+
             println!("[{}] {} — {}", rite.name, step.display(), outcome.message);
             if let Some(seed) = &outcome.secret {
                 println!("\n  session seed (shown once, never written to disk):");
@@ -648,20 +1016,24 @@ fn cmd_next(args: &[String]) {
                 println!("  Hold it in memory only. Later steps read it from {}=<seed>;", rites::SEED_ENV);
                 println!("  at close, unset it and forget it — that act is the shred.");
             }
-            match rites::rite_view(&comms_dir, rite).next {
+            match after.next {
                 Some(j) => {
                     let nstep = &rite.steps[j];
                     println!("next: {}  (comms next --rite {}{})", nstep.display(), rite.name, step_hint(nstep));
                 }
                 None => println!("rite '{}' complete.", rite.name),
             }
+            if !still_live && session_after == "closed" {
+                println!("this session is closed; its record stands and it cannot sign again.");
+            }
+            print_step_line(&line);
         }
         Err(e) => die(e),
     }
 }
 
 fn cmd_waive(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("waive", &["--body"]);
     let type_name = o
         .positionals
         .first()
@@ -675,7 +1047,12 @@ fn cmd_waive(args: &[String]) {
         .unwrap_or_else(|| die("a waiver needs its reason in writing: pass --body <file|->"));
 
     match rites::record_waiver(&comms_dir, &cfg, type_name, &body) {
-        Ok(outcome) => println!("{}", outcome.message),
+        Ok(outcome) => {
+            println!("{}", outcome.message);
+            let mut line: Vec<(String, String)> = vec![("act".into(), "waive".into())];
+            line.extend(outcome.facts);
+            print_step_line(&line);
+        }
         Err(e) => die(e),
     }
 }
@@ -683,7 +1060,7 @@ fn cmd_waive(args: &[String]) {
 // ---- verify ----------------------------------------------------------------
 
 fn cmd_verify(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("verify", &[]);
     let path = o
         .positionals
         .first()
@@ -691,16 +1068,31 @@ fn cmd_verify(args: &[String]) {
         .unwrap_or_else(|| die("usage: comms verify <bundle.cbor>"));
     let bundle = read_bundle(path);
 
-    let seal_ids: HashSet<String> = bundle.members().iter().map(Attestation::id).collect();
-    let members = seal_ids.len();
+    // Count member *entries*, not distinct ids. Two copies of one core (the
+    // same attestation carrying different signature sets) share an id; folding
+    // them into a set and inferring `seals = total - members` turned every such
+    // variant into a phantom seal.
+    let member_atts = bundle.members();
+    let members = member_atts.len();
+    let unique: HashSet<String> = member_atts.iter().map(Attestation::id).collect();
     let total = bundle.attestations.len();
+    let seals = total - members;
     println!(
-        "bundle: {total} attestation{} ({members} member{}, {} seal{})",
+        "bundle: {total} attestation{} ({members} member{}, {seals} seal{})",
         plural(total),
         plural(members),
-        total - members,
-        plural(total - members),
+        plural(seals),
     );
+    if unique.len() != members {
+        let dups = members - unique.len();
+        println!(
+            "  {members} member entries carry {} unique id{}: {dups} duplicate{} of a core \
+             already present (signature variants; `inspect` shows each entry)",
+            unique.len(),
+            plural(unique.len()),
+            plural(dups),
+        );
+    }
     if !bundle.media.is_empty() {
         println!("media: {} blob{}", bundle.media.len(), plural(bundle.media.len()));
     }
@@ -753,7 +1145,7 @@ fn cmd_verify(args: &[String]) {
 // ---- inspect ---------------------------------------------------------------
 
 fn cmd_inspect(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("inspect", &["--json"]);
     let path = o
         .positionals
         .first()
@@ -923,7 +1315,7 @@ fn inspect_json(r: &InspectReport) -> String {
 // ---- seal ------------------------------------------------------------------
 
 fn cmd_seal(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("seal", &["--key", "--out", "--description", "--created-at", "--issued-at", "--signed-at"]);
     let path = o
         .positionals
         .first()
@@ -952,7 +1344,7 @@ fn cmd_seal(args: &[String]) {
 // ---- pack ------------------------------------------------------------------
 
 fn cmd_pack(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("pack", &["--out", "--media", "--seal", "--key", "--description", "--created-at", "--issued-at", "--signed-at"]);
     let out = o.require("--out");
 
     let mut members = Vec::new();
@@ -1033,7 +1425,7 @@ fn expand_cbor_paths(path: &str) -> Vec<String> {
 // ---- extract ---------------------------------------------------------------
 
 fn cmd_extract(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("extract", &["--out"]);
     let path = o
         .positionals
         .first()
@@ -1061,7 +1453,7 @@ fn cmd_extract(args: &[String]) {
 }
 
 fn cmd_deliver(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("deliver", &["--request"]);
     let target_ref = o
         .positionals
         .first()
@@ -1077,10 +1469,17 @@ fn cmd_deliver(args: &[String]) {
         None => rites::recorded_request_id(&comms_dir, archive_rite, "archive")
             .unwrap_or_else(|e| die(e)),
     };
-    let note = rites::deliver_body(&comms_dir, target_ref, &request_id)
+    let d = rites::deliver_body(&comms_dir, target_ref, &request_id)
         .unwrap_or_else(|e| die(format!("delivery refused: {e}")));
-    println!("delivered for request {request_id}{}", note.trim_end());
+    println!("delivered for request {request_id}{}", d.note.trim_end());
     println!("requester should verify the received bytes against the printed blake3 before relying on them.");
+    print_step_line(&[
+        ("act".into(), "deliver".into()),
+        ("result".into(), "delivered".into()),
+        ("re_request".into(), request_id),
+        ("delivered".into(), d.path.display().to_string()),
+        ("delivered_b3".into(), d.b3_hex),
+    ]);
 }
 
 // ---- intake / audit (the archive profile's custody verbs) -------------------
@@ -1103,7 +1502,7 @@ fn resolve_archive_root(arg: Option<&str>) -> std::path::PathBuf {
 }
 
 fn cmd_intake(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("intake", &["--key", "--legacy", "--provenance"]);
     let source = o
         .positionals
         .first()
@@ -1148,6 +1547,9 @@ fn cmd_intake(args: &[String]) {
         if report.new_bodies.len() == 1 { "y" } else { "ies" },
         report.kept_bodies,
     );
+    for (id, n) in &report.merged_signatures {
+        println!("  merged into custody: {id} gained {n} signature{}", plural(*n));
+    }
     for tag in &report.views_regenerated {
         println!("  view regenerated: views/sessions/{tag}/");
     }
@@ -1157,7 +1559,7 @@ fn cmd_intake(args: &[String]) {
 }
 
 fn cmd_audit(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("audit", &[]);
     let root = resolve_archive_root(o.positionals.first().map(String::as_str));
     let archive = comms_core::archive::Archive::at(&root);
     let r = comms_core::archive::audit(&archive).unwrap_or_else(|e| die(e));
@@ -1196,7 +1598,7 @@ fn cmd_audit(args: &[String]) {
 }
 
 fn cmd_catalog(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("catalog", &["--json"]);
     let root = o.positionals.first().map(String::as_str)
         .unwrap_or_else(|| die("usage: comms catalog <path> [--json]"));
     let r = comms_core::archive::catalog(std::path::Path::new(root))
@@ -1245,7 +1647,7 @@ fn cmd_catalog(args: &[String]) {
 }
 
 fn cmd_manifest(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("manifest", &["--level", "--out"]);
     let root = o.positionals.first().map(String::as_str)
         .unwrap_or_else(|| die("usage: comms manifest <path> [--level minimal|full] [--out P]"));
     let level = comms_core::archive::ManifestLevel::parse(o.get("--level").unwrap_or("minimal"))
@@ -1263,14 +1665,24 @@ fn cmd_manifest(args: &[String]) {
 }
 
 fn cmd_trial_log(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args)
+        .accept("trial-log", &["--session", "--steward", "--out", "--force"]);
     let comms_dir = resolve_comms_dir(o.positionals.first().map(String::as_str));
     let session = o.get("--session").map(|value| {
         value
             .parse::<u64>()
             .unwrap_or_else(|_| die(format!("--session must be a non-negative integer, got '{value}'")))
     });
-    let rendered = comms_core::trial_log::render(&comms_dir, session).unwrap_or_else(|e| die(e));
+    // Whose log. Explicit --steward wins; otherwise the session this actor
+    // holds, since several may be live in one work tree and "the current one"
+    // is only ever a question about who is asking.
+    let held = config::load(&comms_dir)
+        .ok()
+        .and_then(|cfg| rites::my_epoch(&comms_dir, &cfg))
+        .and_then(|e| e.id);
+    let steward = o.get("--steward").map(str::to_owned).or(held);
+    let rendered = comms_core::trial_log::render(&comms_dir, session, steward.as_deref())
+        .unwrap_or_else(|e| die(e));
     let Some(out) = o.get("--out") else {
         print!("{rendered}");
         return;
@@ -1292,7 +1704,7 @@ fn cmd_trial_log(args: &[String]) {
 // ---- mint ------------------------------------------------------------------
 
 fn cmd_agent(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("agent", &["--socket"]);
     let comms_dir = std::path::PathBuf::from(".comms");
     let sock = o
         .get("--socket")
@@ -1321,7 +1733,7 @@ fn cmd_agent(args: &[String]) {
 }
 
 fn cmd_mint(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("mint", &["--out", "--label"]);
     let out = o.require("--out");
     let label = o.get("--label").unwrap_or("");
     let seed = os_random_32();
@@ -1341,11 +1753,20 @@ fn default_pending_dirs() -> Vec<std::path::PathBuf> {
     vec![std::path::PathBuf::from(".comms/pending")]
 }
 
-fn pending_dirs(positionals: &[String]) -> Vec<std::path::PathBuf> {
-    if positionals.is_empty() {
+/// Inboxes to look in: every `--pending DIR` plus any positional directory —
+/// `--pending` is spelled the same here as in `sign`, `state`, and `clarify`,
+/// and positionals stay accepted so several inboxes can be named at once.
+fn pending_dirs(o: &Opts, positionals: &[String]) -> Vec<std::path::PathBuf> {
+    let dirs: Vec<std::path::PathBuf> = o
+        .pending
+        .iter()
+        .chain(positionals.iter())
+        .map(std::path::PathBuf::from)
+        .collect();
+    if dirs.is_empty() {
         default_pending_dirs()
     } else {
-        positionals.iter().map(std::path::PathBuf::from).collect()
+        dirs
     }
 }
 
@@ -1390,10 +1811,20 @@ fn select_pending<'a>(
 
 fn cmd_pending(args: &[String]) {
     let action = args.first().map(String::as_str).unwrap_or("list");
-    let o = parse_opts(if args.is_empty() { args } else { &args[1..] });
+    let raw = parse_opts(if args.is_empty() { args } else { &args[1..] });
+    let o = match action {
+        "list" => raw.accept("pending list", &["--pending", "--json"]),
+        "inspect" => raw.accept("pending inspect", &["--pending", "--json"]),
+        "state" => raw.accept("pending state", &["--pending", "--state"]),
+        "clarify" => raw.accept(
+            "pending clarify",
+            &["--pending", "--body", "--key", "--store"],
+        ),
+        _ => raw,
+    };
     match action {
         "list" => {
-            let dirs = pending_dirs(&o.positionals);
+            let dirs = pending_dirs(&o, &o.positionals);
             let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
             if o.has("--json") {
                 let values: Vec<_> = views.iter().map(|v| pending_json(v, false)).collect();
@@ -1420,8 +1851,8 @@ fn cmd_pending(args: &[String]) {
         }
         "inspect" => {
             let selector = o.positionals.first().map(String::as_str)
-                .unwrap_or_else(|| die("usage: comms pending inspect <stem|id> [DIR]... [--json]"));
-            let dirs = pending_dirs(&o.positionals[1..]);
+                .unwrap_or_else(|| die("usage: comms pending inspect <stem|id> [--pending DIR]... [DIR]... [--json]"));
+            let dirs = pending_dirs(&o, &o.positionals[1..]);
             let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
             let view = select_pending(&views, selector);
             if o.has("--json") {
@@ -1445,7 +1876,7 @@ fn cmd_pending(args: &[String]) {
         "state" => {
             let selector = o.positionals.first().map(String::as_str)
                 .unwrap_or_else(|| die("usage: comms pending state <stem|id> --state S [--pending DIR]"));
-            let dirs = o.get("--pending")
+            let dirs = o.one_pending()
                 .map(|d| vec![std::path::PathBuf::from(d)])
                 .unwrap_or_else(default_pending_dirs);
             let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
@@ -1459,7 +1890,7 @@ fn cmd_pending(args: &[String]) {
         "clarify" => {
             let selector = o.positionals.first().map(String::as_str)
                 .unwrap_or_else(|| die("usage: comms pending clarify <stem|id> --body F --key K [--pending DIR] [--store DIR]"));
-            let dirs = o.get("--pending")
+            let dirs = o.one_pending()
                 .map(|d| vec![std::path::PathBuf::from(d)])
                 .unwrap_or_else(default_pending_dirs);
             let views = comms_core::signing::discover_pending(&dirs).unwrap_or_else(|e| die(e));
@@ -1503,9 +1934,9 @@ fn resolve_pending_dir(explicit: Option<&str>) -> std::path::PathBuf {
 }
 
 fn cmd_sign(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("sign", &["--key", "--pending", "--item"]);
     let key = o.require("--key");
-    let pending = resolve_pending_dir(o.get("--pending"));
+    let pending = resolve_pending_dir(o.one_pending());
     let sk = comms_core::signing::load_signing_key(std::path::Path::new(key))
         .unwrap_or_else(|e| die(e));
     let signer = personal_steward_id(sk.verifying_key().as_bytes());
@@ -1531,13 +1962,16 @@ fn cmd_sign(args: &[String]) {
         }
     }
     if outstanding == 0 {
-        println!("\nnext — seal what is signed:  comms finalize --pending {}", pending.display());
+        println!(
+            "\nnext — finalize what is signed:  comms finalize --pending {}",
+            pending.display()
+        );
     }
 }
 
 fn cmd_finalize(args: &[String]) {
-    let o = parse_opts(args);
-    let pending = resolve_pending_dir(o.get("--pending"));
+    let o = parse_opts(args).accept("finalize", &["--pending", "--store", "--item"]);
+    let pending = resolve_pending_dir(o.one_pending());
     let store = o
         .get("--store")
         .map(std::path::PathBuf::from)
@@ -1557,18 +1991,24 @@ fn cmd_finalize(args: &[String]) {
             comms_core::signing::FinalizeOutcome::Stored { stem, id, merged } => {
                 println!("  {stem}: merged {merged} new signature(s) into {id}")
             }
-            comms_core::signing::FinalizeOutcome::AlreadySealed { stem, id } => {
-                println!("  {stem}: already sealed ({id}); nothing new")
+            comms_core::signing::FinalizeOutcome::AlreadyFinalized { stem, id } => {
+                println!("  {stem}: already finalized ({id}); nothing new")
             }
         }
     }
-    println!("\nsealed into {} — commit it; uncommitted is invisible to the next session.", store.display());
+    // Finalization moves signed items into the store. It is not an A1.8 seal;
+    // that is `comms seal` over a packed bundle, and the word stays there.
+    println!(
+        "\nfinalized into {} — commit it; uncommitted is invisible to the next session.",
+        store.display()
+    );
+    println!("  (finalized ≠ sealed: the A1.8 integrity seal is `comms seal` over a bundle.)");
 }
 
 // ---- vouch -----------------------------------------------------------------
 
 fn cmd_vouch(args: &[String]) {
-    let o = parse_opts(args);
+    let o = parse_opts(args).accept("vouch", &["--policy", "--subject", "--purpose", "--as-of", "--community", "--json", "--receipt-out", "--key"]);
     let path = o
         .positionals
         .first()

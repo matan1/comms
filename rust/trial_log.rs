@@ -247,13 +247,19 @@ fn quote_reasoning(reasoning: &str) -> String {
 }
 
 /// Render one `trial-log.md` stub from a verified, session-signed opening
-/// entry. `session_num` selects a historical entry; without it the public id
-/// in `.comms/session.id` selects the current/just-closed session.
-pub fn render(comms_dir: &Path, session_num: Option<u64>) -> Result<String, String> {
+/// entry.
+///
+/// `session_num` selects a historical entry by its own numbering; `steward`
+/// selects by signer. With neither, the caller's own session is used — several
+/// sessions can be live in one work tree, so "the current one" is only ever a
+/// question about who is asking.
+pub fn render(
+    comms_dir: &Path,
+    session_num: Option<u64>,
+    steward: Option<&str>,
+) -> Result<String, String> {
     let store = load_store(comms_dir)?;
-    let current_id = std::fs::read_to_string(comms_dir.join("session.id"))
-        .ok()
-        .map(|s| s.trim().to_owned());
+    let current_id = steward.map(str::to_owned);
 
     let mut entries = Vec::new();
     for att in &store {
@@ -291,9 +297,11 @@ pub fn render(comms_dir: &Path, session_num: Option<u64>) -> Result<String, Stri
         }
     }
     entries.sort_by(|a, b| a.issued_at.cmp(&b.issued_at));
-    let entry = entries.pop().ok_or_else(|| match session_num {
-        Some(n) => format!("no verified signed opening entry found for session {n}"),
-        None => "no verified opening entry signed by .comms/session.id was found".to_owned(),
+    let entry = entries.pop().ok_or_else(|| match (session_num, steward) {
+        (Some(n), _) => format!("no verified signed opening entry found for session {n}"),
+        (None, Some(id)) => format!("no verified opening entry signed by {id} was found"),
+        (None, None) => "no session to render: pass --session <n> or --steward              <comms.steward:z...>, or hold the session whose log you want"
+            .to_owned(),
     })?;
 
     let f = &entry.fields;
@@ -421,7 +429,7 @@ mod tests {
         );
         std::fs::write(comms.join("store/entry.cbor"), att.to_cbor()).unwrap();
 
-        let rendered = render(&comms, None).unwrap();
+        let rendered = render(&comms, None, Some(&sid)).unwrap();
         assert!(rendered.contains("## Session 12 — 2026-07-10"));
         assert!(rendered.contains("chosen deliberately"));
         assert!(rendered.contains("refs previous: comms.attest:zprevious"));

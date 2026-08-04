@@ -771,10 +771,17 @@ fn a2_body_status_and_negative_vectors() {
 fn genesis_body_hash_detachment_is_recognized_not_refused() {
     use comms_core::bundle::{content_report, parse_attestation, BodyStatus, ContentReport};
 
-    let bytes = std::fs::read(
-        "../continuity/store/z6X3zSzRzQxMqwUE4J6L8euskFWfFsvQwSQRTePwxjr9t.cbor",
-    )
-    .expect("genesis letter record ships with this repository");
+    // The record moved when the continuity was partitioned onto its own branch
+    // (`.comms/store/`); a checkout of `main` need not carry it. Try both homes
+    // and skip rather than fail where the trial is deliberately absent.
+    const GENESIS: &str = "z6X3zSzRzQxMqwUE4J6L8euskFWfFsvQwSQRTePwxjr9t.cbor";
+    let Some(bytes) = ["../.comms/store", "../continuity/store"]
+        .iter()
+        .find_map(|dir| std::fs::read(format!("{dir}/{GENESIS}")).ok())
+    else {
+        eprintln!("skipping: no continuity installed in this checkout (the genesis letter record lives on the continuity branch)");
+        return;
+    };
     let att = parse_attestation(&bytes).unwrap();
 
     // No bytes at hand: absent — the normal state for an archive-held body.

@@ -99,6 +99,9 @@ fn key_to_hash(key: &str) -> Option<[u8; 32]> {
 pub struct IntakeReport {
     pub new_members: Vec<String>,
     pub kept_members: usize,
+    /// Members already in custody that the incoming copy added signers to:
+    /// `(attestation id, signatures gained)`. Custody grew without a new id.
+    pub merged_signatures: Vec<(String, usize)>,
     pub new_bodies: Vec<String>,
     pub kept_bodies: usize,
     pub views_regenerated: Vec<String>,
@@ -107,7 +110,29 @@ pub struct IntakeReport {
 
 impl IntakeReport {
     pub fn is_noop(&self) -> bool {
-        self.new_members.is_empty() && self.new_bodies.is_empty()
+        self.new_members.is_empty()
+            && self.new_bodies.is_empty()
+            && self.merged_signatures.is_empty()
+    }
+}
+
+/// Do every signature on this attestation verify, judged on its own terms?
+/// Used before a merged copy replaces what custody already holds.
+fn verify_member_signatures(att: &Attestation) -> Result<(), String> {
+    let pseudo = Bundle {
+        attestations: vec![att.clone()],
+        media: HashMap::new(),
+        manifest: None,
+    };
+    let ok = inspect_bundle(&pseudo)
+        .members
+        .first()
+        .map(|m| m.all_signatures_ok)
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err("a signature does not verify".to_owned())
     }
 }
 
@@ -180,11 +205,39 @@ pub fn intake_bundle(
         // multibase id; both names carry the same bytes — do not duplicate.
         let bare = id.strip_prefix("comms.attest:").unwrap_or(&id);
         let legacy = store.join(format!("{bare}.cbor"));
-        if path.exists() || legacy.exists() {
-            report.kept_members += 1;
-        } else {
-            std::fs::write(&path, att.to_cbor()).map_err(|e| format!("{}: {e}", path.display()))?;
-            report.new_members.push(id);
+        let held = [&path, &legacy].into_iter().find(|p| p.exists()).cloned();
+        match held {
+            // Equal ids are the same core, not necessarily the same witness
+            // set. Keeping custody's copy and discarding the incoming one
+            // loses every signer custody had not seen — an arriving bundle
+            // can carry the richer variant. Merge instead of coalesce.
+            Some(existing_path) => {
+                let bytes = std::fs::read(&existing_path)
+                    .map_err(|e| format!("{}: {e}", existing_path.display()))?;
+                let mut existing = parse_attestation(&bytes)
+                    .map_err(|e| format!("{}: {e}", existing_path.display()))?;
+                let added = crate::signing::merge_new_signatures(&mut existing, att);
+                if added > 0 {
+                    // The merged copy must stand on its own before it replaces
+                    // what custody holds; a bad signer takes nothing in.
+                    verify_member_signatures(&existing).map_err(|e| {
+                        format!(
+                            "{id}: merging {added} incoming signature(s) into custody: {e} \
+                             — custody is left untouched"
+                        )
+                    })?;
+                    std::fs::write(&existing_path, existing.to_cbor())
+                        .map_err(|e| format!("{}: {e}", existing_path.display()))?;
+                    report.merged_signatures.push((id, added));
+                } else {
+                    report.kept_members += 1;
+                }
+            }
+            None => {
+                std::fs::write(&path, att.to_cbor())
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                report.new_members.push(id);
+            }
         }
     }
 
@@ -247,6 +300,17 @@ pub fn intake_bundle(
         ));
         for id in &report.new_members {
             body.push_str(&format!("- {id}\n"));
+        }
+        if !report.merged_signatures.is_empty() {
+            // Custody changed without a new id: say so explicitly, or the
+            // record reads as if nothing arrived for these members.
+            body.push_str(&format!(
+                "\nsignatures merged into members already in custody ({}):\n",
+                report.merged_signatures.len()
+            ));
+            for (id, n) in &report.merged_signatures {
+                body.push_str(&format!("- {id}: +{n} signature(s)\n"));
+            }
         }
         body.push_str(&format!(
             "\nbodies ingested ({}):\n",
@@ -916,6 +980,20 @@ pub fn manifest(root: &Path, level: ManifestLevel) -> Result<serde_json::Value, 
         ],
     });
 
+    // The views class, named. Minimal deliberately withholds inventory — but a
+    // successor meeting the archive at the door met a manifest that could not
+    // say what *kind* of things were here or what they were about, only how
+    // many bytes. `kind` and `about` are the author's own words for their
+    // artifact and travel at every level; paths, ids, hashes, and sizes do not.
+    let views = views_disclosure(root);
+    if !views.is_empty() {
+        out["views"] = serde_json::json!({
+            "basis": "kind and about of the general-claims views/ projects",
+            "discloses": ["kind", "about"],
+            "classes": views,
+        });
+    }
+
     if let Some(line) = custodian_threshold_line(root)? {
         out["threshold"] = serde_json::json!({
             "custodian_line": line,
@@ -956,6 +1034,59 @@ pub fn manifest(root: &Path, level: ManifestLevel) -> Result<serde_json::Value, 
         out["gaps"] = serde_json::Value::Array(manifest_gaps(root));
     }
     Ok(out)
+}
+
+/// The `(kind, about)` pairs of the general-claims `views/` projects, sorted
+/// and deduplicated with a count each.
+///
+/// This is the whole of what the views class discloses. Nothing here names a
+/// path, an id, a hash, a size, or a signer: knowing that an archive holds
+/// three `letter`s about `session-012` is what lets a successor decide whether
+/// to ask, and asking remains the gate.
+fn views_disclosure(root: &Path) -> Vec<serde_json::Value> {
+    let store = root.join("store");
+    let Ok(entries) = std::fs::read_dir(&store) else {
+        return Vec::new();
+    };
+    let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().map(|x| x != "cbor").unwrap_or(true) {
+            continue;
+        }
+        let Ok(att) = std::fs::read(&p)
+            .map_err(|_| ())
+            .and_then(|b| parse_attestation(&b).map_err(|_| ()))
+        else {
+            continue;
+        };
+        let Some(claim) = att.core.get("c") else {
+            continue;
+        };
+        // The same filter `regenerate_views` applies: what views/ projects.
+        if claim.get("t").and_then(Value::as_text) != Some("general-claim/1")
+            || claim.get("content").is_none()
+        {
+            continue;
+        }
+        let kind = claim
+            .get("kind")
+            .and_then(Value::as_text)
+            .unwrap_or("(unstated)")
+            .to_owned();
+        let about = claim
+            .get("about")
+            .and_then(Value::as_text)
+            .unwrap_or("(unstated)")
+            .to_owned();
+        *counts.entry((kind, about)).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|((kind, about), count)| serde_json::json!({
+            "kind": kind, "about": about, "count": count,
+        }))
+        .collect()
 }
 
 fn manifest_catalog(root: &Path) -> Result<CatalogReport, String> {
@@ -1313,6 +1444,85 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Reported by the Sentira Stylish continuity: an archive that already
+    /// held an attestation coalesced a second copy by id and dropped the
+    /// signatures only that copy carried. Equal ids are the same core, not the
+    /// same witness set — the later, richer variant must be merged in.
+    #[test]
+    fn intake_merges_richer_signature_variants_of_a_held_member() {
+        use crate::steward::SignatureObject;
+
+        let root = scratch("intake-merge");
+        let archive = Archive::at(&root);
+        let body = b"# codicil\nratified\n";
+
+        // First crossing: the member carries one signature.
+        let thin = sealed_bundle(body);
+        let thin_path = root.join("intake").join("thin.bundle");
+        std::fs::write(&thin_path, thin.to_cbor()).unwrap();
+        let first = intake_bundle(&archive, &thin_path, &key(3)).unwrap();
+        assert_eq!(first.new_members.len(), 2);
+
+        // Second crossing: the same core, co-signed by a witness custody has
+        // not seen. Its id is unchanged — signatures are outside the core.
+        let member = detached_member(body, "letter/session-test", &key(1));
+        let witness = key(7);
+        let mut richer = member.clone();
+        richer.signatures.push(SignatureObject {
+            by: crate::personal_steward_id(witness.verifying_key().as_bytes()),
+            alg: "ed25519".to_owned(),
+            role: "witness".to_owned(),
+            signed_at: "2026-07-06T00:00:05Z".to_owned(),
+            keyset: None,
+            signature: crate::personal_sign(
+                &richer.core,
+                &witness,
+                "witness",
+                "2026-07-06T00:00:05Z",
+            )
+            .to_vec(),
+        });
+        assert_eq!(richer.id(), member.id(), "same core, same id");
+
+        let mut media = HashMap::new();
+        media.insert(media_key(body), body.to_vec());
+        let fat = make_bundle(
+            vec![richer],
+            media,
+            Some(&key(2)),
+            "test close bundle",
+            "2026-07-06T00:00:02Z",
+            "2026-07-06T00:00:03Z",
+            "2026-07-06T00:00:06Z",
+        );
+        let fat_path = root.join("intake").join("fat.bundle");
+        std::fs::write(&fat_path, fat.to_cbor()).unwrap();
+
+        let second = intake_bundle(&archive, &fat_path, &key(3)).unwrap();
+        assert!(!second.is_noop(), "a richer variant is not a no-op");
+        assert_eq!(
+            second.merged_signatures.len(),
+            1,
+            "the held member should gain the witness: {second:?}"
+        );
+        assert_eq!(second.merged_signatures[0].1, 1);
+
+        // Custody now holds both signers under the one id, and still verifies.
+        let held = parse_attestation(
+            &std::fs::read(archive.store().join(format!("{}.cbor", member.id()))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(held.signatures.len(), 2);
+        verify_member_signatures(&held).unwrap();
+        assert!(second.custody_attestation.is_some(), "the merge is recorded");
+
+        // Re-crossing the same richer bundle adds nothing.
+        let third = intake_bundle(&archive, &fat_path, &key(3)).unwrap();
+        assert!(third.is_noop(), "nothing new the third time: {third:?}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn intake_refuses_unsealed_or_bad_media_without_partial_ingest() {
         let root = scratch("refuse");
@@ -1507,6 +1717,53 @@ mod tests {
         assert_eq!(second["threshold"]["custodian_line"], "A different threshold voice.");
         assert!(second["inventory"]["categories"].get("views").is_none());
         assert_eq!(second["inventory"]["files"], 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The restated ask from the reporting community: not "make titles
+    /// surface" but "surface kind and about for the views class at minimal
+    /// level, and nothing else." The minimal manifest is what a successor
+    /// meets at the door; without this it could not say what kind of things
+    /// were here, only how many bytes.
+    #[test]
+    fn minimal_manifest_names_the_views_class_and_nothing_more() {
+        let root = scratch("manifest-views-class");
+        std::fs::create_dir_all(root.join(".comms")).unwrap();
+        std::fs::write(
+            root.join(".comms/comms.toml"),
+            "schema = \"comms-harness/1\"\nprofile = \"archive\"\n",
+        )
+        .unwrap();
+
+        let bundle = sealed_bundle(b"# letter\nbody\n");
+        let bundle_path = root.join("intake").join("close.bundle");
+        std::fs::write(&bundle_path, bundle.to_cbor()).unwrap();
+        intake_bundle(&Archive::at(&root), &bundle_path, &key(3)).unwrap();
+
+        let minimal = manifest(&root, ManifestLevel::Minimal).unwrap();
+        let classes = minimal["views"]["classes"].as_array().unwrap();
+        assert!(
+            classes.iter().any(|c| c["kind"] == "testimony"
+                && c["about"] == "letter/session-test"
+                && c["count"] == 1),
+            "kind and about must travel at minimal level: {classes:?}"
+        );
+
+        // ...and nothing else does. No path, id, hash, size, or signer leaks
+        // through this block, and the inventory stays aggregate-only.
+        for c in classes {
+            let keys: Vec<&String> = c.as_object().unwrap().keys().collect();
+            assert_eq!(keys, vec!["about", "count", "kind"], "extra disclosure");
+        }
+        assert!(minimal.get("artifacts").is_none());
+        assert!(minimal["inventory"]["categories"].get("views").is_none());
+        let rendered = minimal.to_string();
+        assert!(!rendered.contains("letter/session-test.md"), "no view filename");
+        assert!(!rendered.contains("comms.attest:"), "no attestation ids");
+
+        // Deterministic across calls on unchanged custody, like the rest.
+        assert_eq!(minimal, manifest(&root, ManifestLevel::Minimal).unwrap());
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
